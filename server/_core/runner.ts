@@ -5,6 +5,7 @@ import fs from "node:fs";
 import pidusage from "pidusage";
 import { JavaPingClient, BedrockPingClient } from "craftping";
 import * as db from "../db";
+import { getPortableJava, getInstalledJavaVersions } from "./javaPortable";
 
 const execAsync = promisify(exec);
 
@@ -206,20 +207,31 @@ setInterval(async () => {
   } catch {}
 }, 10000);
 
-export function startMinecraftServer(serverId: number, directory: string, type: "java" | "bedrock" | "bedrock-linux" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge" | "pocketmine" | "nukkit" | "cloudburst", port: number, mcVersion: string, javaArgs = "-Xmx2G -Xms1G") {
+export async function startMinecraftServer(serverId: number, directory: string, type: "java" | "bedrock" | "bedrock-linux" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge" | "pocketmine" | "nukkit" | "cloudburst", port: number, mcVersion: string, javaArgs = "-Xmx2G -Xms1G") {
   if (activeServers.has(serverId)) {
     throw new Error("Server is already running");
   }
 
+  let javaExecutable = "java";
   if (type !== "bedrock" && type !== "bedrock-linux") {
     try {
-      const javaCheck = spawnSync("java", ["-version"], { encoding: "utf8" });
-      const versionOutput = javaCheck.stderr || javaCheck.stdout;
-      const versionMatch = versionOutput.match(/(?:version "|openjdk version ")(\d+)/);
-      const majorVersion = versionMatch ? parseInt(versionMatch[1]) : 0;
-      const isModern = mcVersion && (mcVersion.startsWith("1.21") || mcVersion.startsWith("1.20.5") || mcVersion.startsWith("1.20.6"));
-      if (isModern && majorVersion < 21) throw new Error(`Java ${majorVersion} detected. MC 1.21+ requires Java 21.`);
-      else if (majorVersion > 0 && majorVersion < 17) throw new Error(`Java ${majorVersion} is too old. MC 1.18+ requires Java 17+.`);
+      let requiredJava = 17;
+      if (mcVersion && (mcVersion.startsWith("1.21") || mcVersion.startsWith("1.20.5") || mcVersion.startsWith("1.20.6"))) {
+        requiredJava = 21;
+      }
+      try {
+        javaExecutable = await getPortableJava(requiredJava);
+        console.log(`[Server ${serverId}] Using portable Java ${requiredJava}`);
+      } catch (portableError) {
+        console.warn(`[Server ${serverId}] Portable Java setup failed, trying system Java:`, portableError);
+        const javaCheck = spawnSync("java", ["-version"], { encoding: "utf8" });
+        const versionOutput = javaCheck.stderr || javaCheck.stdout;
+        const versionMatch = versionOutput.match(/(?:version "|openjdk version ")(\d+)/);
+        const majorVersion = versionMatch ? parseInt(versionMatch[1]) : 0;
+        if (majorVersion > 0 && majorVersion < requiredJava) {
+          throw new Error(`Java ${majorVersion} detected. MC ${mcVersion || "current"} requires Java ${requiredJava}+.`);
+        }
+      }
     } catch (e) {
       if (e instanceof Error && e.message.includes("Java")) throw e;
     }
@@ -246,12 +258,12 @@ export function startMinecraftServer(serverId: number, directory: string, type: 
     const jarPath = path.join(directory, jarName);
     if (!fs.existsSync(jarPath)) throw new Error(`${jarName} not found.`);
     fs.writeFileSync(path.join(directory, "eula.txt"), "eula=true");
-    child = spawn("java", [...javaArgs.split(" ").filter(Boolean), "-jar", jarName, "nogui"], { cwd: directory });
+    child = spawn(javaExecutable, [...javaArgs.split(" ").filter(Boolean), "-jar", jarName, "nogui"], { cwd: directory });
   } else {
     const jarPath = path.join(directory, "server.jar");
     if (!fs.existsSync(jarPath)) throw new Error("server.jar not found. Please download it first.");
     fs.writeFileSync(path.join(directory, "eula.txt"), "eula=true");
-    child = spawn("java", [...javaArgs.split(" ").filter(Boolean), "-jar", "server.jar", "nogui"], { cwd: directory });
+    child = spawn(javaExecutable, [...javaArgs.split(" ").filter(Boolean), "-jar", "server.jar", "nogui"], { cwd: directory });
   }
 
   const serverInfo: RunningServer = {

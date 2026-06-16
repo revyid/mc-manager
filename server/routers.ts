@@ -9,6 +9,7 @@ import { sdk } from "./_core/sdk";
 import { TRPCError } from "@trpc/server";
 import { getVersionsByType, downloadServerJar, ServerType } from "./_core/minecraft";
 import { startMinecraftServer, stopMinecraftServer, restartMinecraftServer, isServerRunning, sendCommand, getServerLogs, getLiveServerStats, getDirSizeMBAsync } from "./_core/runner";
+import { getPortableJava, getInstalledJavaVersions, deletePortableJava, getJavaVersionString } from "./_core/javaPortable";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
@@ -188,7 +189,7 @@ export const appRouter = router({
 
         try {
           const javaArgs = server.javaArgs || "-Xmx2G -Xms1G";
-          startMinecraftServer(input.serverId, server.directory, server.type as any, server.port, server.version || "latest", javaArgs);
+          await startMinecraftServer(input.serverId, server.directory, server.type as any, server.port, server.version || "latest", javaArgs);
           await db.updateServer(input.serverId, { status: "online" });
           return { success: true, message: "Server started" };
         } catch (error) {
@@ -1304,6 +1305,41 @@ export const appRouter = router({
           filename: path.basename(target),
           size: stat.size,
         };
+      }),
+  }),
+
+  javaPortable: router({
+    getInstalledVersions: protectedProcedure
+      .query(() => {
+        return getInstalledJavaVersions();
+      }),
+
+    setupVersion: protectedProcedure
+      .input(z.object({ version: z.number() }))
+      .mutation(async ({ input }) => {
+        try {
+          const javaPath = await getPortableJava(input.version);
+          const versionString = await getJavaVersionString(javaPath);
+          return { success: true, path: javaPath, version: versionString };
+        } catch (error) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Failed to setup Java ${input.version}: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      }),
+
+    deleteVersion: protectedProcedure
+      .input(z.object({ version: z.number() }))
+      .mutation(({ input }) => {
+        const deleted = deletePortableJava(input.version);
+        if (!deleted) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Java ${input.version} not found`,
+          });
+        }
+        return { success: true };
       }),
   }),
 });
