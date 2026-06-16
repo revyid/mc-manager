@@ -207,13 +207,13 @@ setInterval(async () => {
   } catch {}
 }, 10000);
 
-export async function startMinecraftServer(serverId: number, directory: string, type: "java" | "bedrock" | "bedrock-linux" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge" | "pocketmine" | "nukkit" | "cloudburst", port: number, mcVersion: string, javaArgs = "-Xmx2G -Xms1G") {
+export async function startMinecraftServer(serverId: number, directory: string, type: "java" | "bedrock" | "bedrock-linux" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge" | "pocketmine" | "nukkit" | "cloudburst", port: number, mcVersion: string, javaArgs = "-Xmx2G -Xms1G", customJavaPath?: string) {
   if (activeServers.has(serverId)) {
     throw new Error("Server is already running");
   }
 
-  let javaExecutable = "java";
-  if (type !== "bedrock" && type !== "bedrock-linux") {
+  let javaExecutable = customJavaPath || "java";
+  if (!customJavaPath && type !== "bedrock" && type !== "bedrock-linux") {
     try {
       let requiredJava = 17;
       if (mcVersion && (mcVersion.startsWith("1.21") || mcVersion.startsWith("1.20.5") || mcVersion.startsWith("1.20.6"))) {
@@ -314,7 +314,8 @@ export async function startMinecraftServer(serverId: number, directory: string, 
                 dbServer.type as any,
                 dbServer.port,
                 dbServer.version || "latest",
-                dbServer.javaArgs || "-Xmx2G -Xms1G"
+                dbServer.javaArgs || "-Xmx2G -Xms1G",
+                dbServer.javaPath || undefined
               );
               db.updateServer(serverId, { status: "online" }).catch(() => {});
             } catch (err) {
@@ -371,10 +372,10 @@ function forceKillProcess(server: RunningServer) {
   }
 }
 
-export function restartMinecraftServer(serverId: number, directory: string, type: RunningServer["type"], port: number, version: string, javaArgs = "-Xmx2G -Xms1G") {
+export function restartMinecraftServer(serverId: number, directory: string, type: RunningServer["type"], port: number, version: string, javaArgs = "-Xmx2G -Xms1G", customJavaPath?: string) {
   const doStart = () => {
     try {
-      startMinecraftServer(serverId, directory, type, port, version, javaArgs);
+      startMinecraftServer(serverId, directory, type, port, version, javaArgs, customJavaPath);
     } catch (err) {
       console.error(`[Server ${serverId}] Restart failed:`, err);
     }

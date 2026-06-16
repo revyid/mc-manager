@@ -144,6 +144,7 @@ export const appRouter = router({
           type: z.enum(["java", "bedrock", "bedrock-linux", "fabric", "paper", "purpur", "spigot", "forge", "neoforge", "pocketmine", "nukkit", "cloudburst"]),
           port: z.number(),
           maxPlayers: z.number(),
+          javaArgs: z.string().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -168,7 +169,7 @@ export const appRouter = router({
         await db.updateServer(input.serverId, { version: input.version });
         
         try {
-          await downloadServerJar(input.version, server.type as "java" | "bedrock", server.directory);
+          await downloadServerJar(input.version, server.type as any, server.directory);
           return { success: true, message: "Server files downloaded successfully" };
         } catch (error) {
           console.error("Download failed:", error);
@@ -189,7 +190,7 @@ export const appRouter = router({
 
         try {
           const javaArgs = server.javaArgs || "-Xmx2G -Xms1G";
-          await startMinecraftServer(input.serverId, server.directory, server.type as any, server.port, server.version || "latest", javaArgs);
+          await startMinecraftServer(input.serverId, server.directory, server.type as any, server.port, server.version || "latest", javaArgs, server.javaPath || undefined);
           await db.updateServer(input.serverId, { status: "online" });
           return { success: true, message: "Server started" };
         } catch (error) {
@@ -218,7 +219,7 @@ export const appRouter = router({
 
         const javaArgs = server.javaArgs || "-Xmx2G -Xms1G";
         await db.updateServer(input.serverId, { status: "online" });
-        restartMinecraftServer(input.serverId, server.directory, server.type as any, server.port, server.version || "latest", javaArgs);
+        restartMinecraftServer(input.serverId, server.directory, server.type as any, server.port, server.version || "latest", javaArgs, server.javaPath || undefined);
         return { success: true, message: "Server restarting gracefully (world saving)..." };
       }),
 
@@ -386,6 +387,20 @@ export const appRouter = router({
         if (server.ownerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Not your server" });
         await db.updateServer(input.serverId, { javaArgs: input.javaArgs });
         return { success: true, message: "JVM args saved. Restart server to apply." };
+      }),
+
+    updateJavaPath: protectedProcedure
+      .input(z.object({
+        serverId: z.number(),
+        javaPath: z.string().nullable(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const server = await db.getServerById(input.serverId);
+        if (!server) throw new TRPCError({ code: "NOT_FOUND", message: "Server not found" });
+        if (server.ownerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Not your server" });
+
+        await db.updateServer(input.serverId, { javaPath: input.javaPath });
+        return { success: true, message: "Java path updated" };
       }),
 
     toggleAutoRestart: protectedProcedure

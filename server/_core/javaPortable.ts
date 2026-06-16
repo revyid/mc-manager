@@ -13,21 +13,65 @@ interface JavaVersion {
   filename: string;
 }
 
-const JAVA_VERSIONS: Record<number, JavaVersion> = {
+interface JavaVersionInfo {
+  downloadUrl: string;
+  filename: string;
+}
+
+const JAVA_VERSIONS: Record<number, Record<string, Record<string, JavaVersionInfo>>> = {
   21: {
-    version: 21,
-    downloadUrl: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jdk_x64_linux_hotspot_21.0.2_13.tar.gz",
-    filename: "java-21-linux.tar.gz",
+    linux: {
+      x64: {
+        downloadUrl: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jdk_x64_linux_hotspot_21.0.2_13.tar.gz",
+        filename: "java-21-linux-x64.tar.gz",
+      },
+      aarch64: {
+        downloadUrl: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.2_13.tar.gz",
+        filename: "java-21-linux-aarch64.tar.gz",
+      }
+    },
+    win32: {
+      x64: {
+        downloadUrl: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jdk_x64_windows_hotspot_21.0.2_13.zip",
+        filename: "java-21-win-x64.zip",
+      }
+    }
   },
   17: {
-    version: 17,
-    downloadUrl: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.10%2B7/OpenJDK17U-jdk_x64_linux_hotspot_17.0.10_7.tar.gz",
-    filename: "java-17-linux.tar.gz",
+    linux: {
+      x64: {
+        downloadUrl: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.10%2B7/OpenJDK17U-jdk_x64_linux_hotspot_17.0.10_7.tar.gz",
+        filename: "java-17-linux-x64.tar.gz",
+      },
+      aarch64: {
+        downloadUrl: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.10%2B7/OpenJDK17U-jdk_aarch64_linux_hotspot_17.0.10_7.tar.gz",
+        filename: "java-17-linux-aarch64.tar.gz",
+      }
+    },
+    win32: {
+      x64: {
+        downloadUrl: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.10%2B7/OpenJDK17U-jdk_x64_windows_hotspot_17.0.10_7.zip",
+        filename: "java-17-win-x64.zip",
+      }
+    }
   },
   11: {
-    version: 11,
-    downloadUrl: "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.21%2B9/OpenJDK11U-jdk_x64_linux_hotspot_11.0.21_9.tar.gz",
-    filename: "java-11-linux.tar.gz",
+    linux: {
+      x64: {
+        downloadUrl: "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.21%2B9/OpenJDK11U-jdk_x64_linux_hotspot_11.0.21_9.tar.gz",
+        filename: "java-11-linux-x64.tar.gz",
+      },
+      aarch64: {
+        downloadUrl: "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.21%2B9/OpenJDK11U-jdk_aarch64_linux_hotspot_11.0.21_9.tar.gz",
+        filename: "java-11-linux-aarch64.tar.gz",
+      }
+    },
+    win32: {
+      x64: {
+        downloadUrl: "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.21%2B9/OpenJDK11U-jdk_x64_windows_hotspot_11.0.21_9.zip",
+        filename: "java-11-win-x64.zip",
+      }
+    }
   },
 };
 
@@ -39,9 +83,17 @@ const JAVA_PORTABLE_DIR = path.join(process.cwd(), ".java-portable");
  * @returns Path to Java executable
  */
 export async function getPortableJava(version: number = 21): Promise<string> {
-  const versionInfo = JAVA_VERSIONS[version];
-  if (!versionInfo) {
+  const platform = process.platform === "win32" ? "win32" : "linux";
+  const arch = process.arch === "arm64" ? "aarch64" : "x64";
+  
+  const platformVersions = JAVA_VERSIONS[version];
+  if (!platformVersions) {
     throw new Error(`Java ${version} not supported. Available: ${Object.keys(JAVA_VERSIONS).join(", ")}`);
+  }
+
+  const versionInfo = platformVersions[platform]?.[arch];
+  if (!versionInfo) {
+    throw new Error(`Java ${version} not supported for ${platform}/${arch}`);
   }
 
   // Ensure portable directory exists
@@ -135,7 +187,7 @@ export function getInstalledJavaVersions(): number[] {
   if (!fs.existsSync(JAVA_PORTABLE_DIR)) return [];
   const versions: number[] = [];
   for (const dir of fs.readdirSync(JAVA_PORTABLE_DIR)) {
-    const match = dir.match(/java-(\d+)/);
+    const match = dir.match(/^java-(\d+)$/);
     if (match) {
       const version = parseInt(match[1]);
       const javaExe = process.platform === "win32"

@@ -75,6 +75,7 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
   const [jvmDirty, setJvmDirty] = useState(false);
   const [jvmSaving, setJvmSaving] = useState(false);
   const [autoRestart, setAutoRestart] = useState(false);
+  const [javaPath, setJavaPath] = useState<string | null>(null);
 
   // Resource Limits state
   const [ramLimit, setRamLimit] = useState(4096);
@@ -102,6 +103,11 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
   const updateJavaArgsMutation = trpc.servers.updateJavaArgs.useMutation({
     onSuccess: () => { setJvmDirty(false); toast.success("JVM args saved! Restart server to apply."); },
     onError: (e) => toast.error(e.message || "Failed to save JVM args"),
+  });
+
+  const updateJavaPathMutation = trpc.servers.updateJavaPath.useMutation({
+    onSuccess: () => { setJvmDirty(false); toast.success("Java path saved! Restart server to apply."); },
+    onError: (e) => toast.error(e.message || "Failed to save Java path"),
   });
 
   const toggleAutoRestartMutation = trpc.servers.toggleAutoRestart.useMutation({
@@ -144,7 +150,8 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
     if (serverInfo.storageLimit !== undefined) {
       setStorageLimit(serverInfo.storageLimit);
     }
-  }, [serverInfo?.javaArgs, serverInfo?.autoRestart, serverInfo?.ramLimit, serverInfo?.storageLimit]);
+    setJavaPath(serverInfo.javaPath ?? null);
+  }, [serverInfo?.javaArgs, serverInfo?.autoRestart, serverInfo?.ramLimit, serverInfo?.storageLimit, serverInfo?.javaPath]);
 
   // When system info loads, auto-set storageLimit from real disk if still at default
   useEffect(() => {
@@ -172,18 +179,20 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
       setRamLimit(xmx);
       setLimitsDirty(true);
     }
-    updateJavaArgsMutation.mutate(
-      { serverId, javaArgs: args },
-      {
-        onSettled: () => setJvmSaving(false),
-        onSuccess: () => {
-          // Save resource limits too so ramLimit is persisted
-          if (xmx !== ramLimit) {
-            updateResourceLimitsMutation.mutate({ serverId, ramLimit: xmx, storageLimit });
-          }
-        },
+    
+    // Save both args and path
+    Promise.all([
+      updateJavaArgsMutation.mutateAsync({ serverId, javaArgs: args }),
+      updateJavaPathMutation.mutateAsync({ serverId, javaPath: javaPath || null })
+    ]).then(() => {
+      setJvmSaving(false);
+      // Save resource limits too so ramLimit is persisted
+      if (xmx !== ramLimit) {
+        updateResourceLimitsMutation.mutate({ serverId, ramLimit: xmx, storageLimit });
       }
-    );
+    }).catch(() => {
+      setJvmSaving(false);
+    });
   };
 
   const { data, isLoading, refetch } = trpc.servers.getProperties.useQuery(
@@ -297,6 +306,21 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
               <span>{systemRamMB > 0 ? `${(xmxMax / 1024).toFixed(0)} GB (system max)` : "32 GB"}</span>
             </div>
           </div>
+
+          <Separator />
+
+          <div className="space-y-2">
+            <Label className="text-xs font-medium">Custom Java Path</Label>
+            <p className="text-xs text-muted-foreground">Override the default Java executable path (e.g., /usr/bin/java or C:\Java\bin\java.exe). Leave empty for default.</p>
+            <Input
+              value={javaPath || ""}
+              placeholder="Default (Auto-detected)"
+              className="h-9 text-sm font-mono"
+              onChange={(e) => { setJavaPath(e.target.value || null); setJvmDirty(true); }}
+            />
+          </div>
+
+          <Separator />
 
           {/* Xms */}
           <div className="space-y-2">

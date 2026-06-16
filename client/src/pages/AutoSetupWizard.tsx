@@ -14,7 +14,7 @@ import { CheckCircle2, ChevronLeft, ChevronRight, Loader2, Server, Package, Sett
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 
-type ServerType = "java" | "bedrock" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge";
+type ServerType = "java" | "bedrock" | "bedrock-linux" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge" | "pocketmine" | "nukkit" | "cloudburst";
 type Step = "type" | "version" | "config" | "download" | "complete";
 
 const STEPS: { id: Step; label: string; icon: React.ElementType }[] = [
@@ -32,7 +32,11 @@ const SERVER_TYPES = [
   { value: "spigot",   label: "Spigot",      desc: "Classic plugin server. Requires BuildTools to build.", badge: "Plugins",     group: "Java" },
   { value: "forge",    label: "Forge",       desc: "Most popular mod loader for heavy modpacks.",          badge: "Modpacks",    group: "Java" },
   { value: "neoforge", label: "NeoForge",    desc: "Modern Forge fork. Future of modded Minecraft.",      badge: "Modern",      group: "Java" },
-  { value: "bedrock",  label: "Bedrock",     desc: "Cross-platform — mobile, console, Windows.",          badge: "Cross-platform", group: "Bedrock" },
+  { value: "bedrock",  label: "Bedrock (Win)", desc: "Official Windows Bedrock server.",          badge: "Windows", group: "Bedrock" },
+  { value: "bedrock-linux", label: "Bedrock (Linux)", desc: "Official Linux Bedrock server.",          badge: "Linux", group: "Bedrock" },
+  { value: "pocketmine", label: "PocketMine-MP", desc: "Highly customizable PHP-based Bedrock server.", badge: "Custom", group: "Bedrock" },
+  { value: "nukkit", label: "Nukkit", desc: "Java-based Bedrock server with plugin support.", badge: "Plugins", group: "Bedrock" },
+  { value: "cloudburst", label: "Cloudburst", desc: "Modern Java-based Bedrock server.", badge: "Modern", group: "Bedrock" },
 ] as const;
 
 export default function AutoSetupWizard() {
@@ -67,7 +71,8 @@ export default function AutoSetupWizard() {
     }
     if (step === "config") {
       if (!config.name.trim()) { toast.error("Server name required"); return; }
-      if (config.type !== "bedrock" && !config.acceptEula) { toast.error("Accept the EULA to continue"); return; }
+      const isBedrockType = ["bedrock", "bedrock-linux", "pocketmine", "nukkit", "cloudburst"].includes(config.type);
+      if (!isBedrockType && !config.acceptEula) { toast.error("Accept the EULA to continue"); return; }
       setStep("download");
       try {
         const server = await createMutation.mutateAsync({ name: config.name, type: config.type as any, port: config.port, maxPlayers: config.maxPlayers });
@@ -234,7 +239,7 @@ export default function AutoSetupWizard() {
                 </div>
               </div>
 
-              {config.type !== "bedrock" && (
+              {!isBedrockType && (
                 <>
                   <div className="space-y-1.5">
                     <Label>Java Arguments</Label>
