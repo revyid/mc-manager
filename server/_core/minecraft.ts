@@ -11,7 +11,7 @@ const FABRIC_META_URL = "https://meta.fabricmc.net/v2";
 const PAPER_API = "https://api.papermc.io/v2";
 const PURPUR_API = "https://api.purpurmc.org/v2";
 
-export type ServerType = "java" | "bedrock" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge";
+export type ServerType = "java" | "bedrock" | "bedrock-linux" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge" | "pocketmine" | "nukkit" | "cloudburst";
 
 export interface McVersion {
   id: string;
@@ -112,6 +112,46 @@ export async function getBedrockVersions(): Promise<McVersion[]> {
   return [{ id: "latest", type: "release", releaseTime: new Date().toISOString() }];
 }
 
+export async function getBedrockLinuxVersions(): Promise<McVersion[]> {
+  return [{ id: "latest", type: "release", releaseTime: new Date().toISOString() }];
+}
+
+export async function getPocketMineVersions(): Promise<McVersion[]> {
+  try {
+    const { data } = await axios.get("https://api.github.com/repos/pmmp/PocketMine-MP/releases");
+    return data
+      .filter((r: any) => !r.prerelease)
+      .slice(0, 30)
+      .map((r: any) => ({ id: r.tag_name.replace(/^v/, ""), type: "release", releaseTime: r.published_at }));
+  } catch {
+    return [];
+  }
+}
+
+export async function getNukkitVersions(): Promise<McVersion[]> {
+  try {
+    const { data } = await axios.get("https://api.github.com/repos/CloudburstMC/Nukkit/releases");
+    return data
+      .filter((r: any) => !r.prerelease)
+      .slice(0, 30)
+      .map((r: any) => ({ id: r.tag_name.replace(/^v/, ""), type: "release", releaseTime: r.published_at }));
+  } catch {
+    return [];
+  }
+}
+
+export async function getCloudburstVersions(): Promise<McVersion[]> {
+  try {
+    const { data } = await axios.get("https://api.github.com/repos/CloudburstMC/Cloudburst/releases");
+    return data
+      .filter((r: any) => !r.prerelease)
+      .slice(0, 30)
+      .map((r: any) => ({ id: r.tag_name.replace(/^v/, ""), type: "release", releaseTime: r.published_at }));
+  } catch {
+    return [];
+  }
+}
+
 export async function getVersionsByType(type: ServerType): Promise<McVersion[]> {
   switch (type) {
     case "java": return getJavaVersions();
@@ -122,6 +162,10 @@ export async function getVersionsByType(type: ServerType): Promise<McVersion[]> 
     case "forge": return getForgeVersions();
     case "neoforge": return getNeoForgeVersions();
     case "bedrock": return getBedrockVersions();
+    case "bedrock-linux": return getBedrockLinuxVersions();
+    case "pocketmine": return getPocketMineVersions();
+    case "nukkit": return getNukkitVersions();
+    case "cloudburst": return getCloudburstVersions();
     default: return [];
   }
 }
@@ -200,6 +244,65 @@ export async function downloadServerJar(versionId: string, type: ServerType, tar
     const response = await axios({ url: link.downloadUrl, method: "GET", responseType: "stream" });
     await streamPipeline(response.data, fs.createWriteStream(targetPath));
     return targetPath;
+  }
+
+  if (type === "bedrock-linux") {
+    const BEDROCK_SERVICES_URL = "https://net-secondary.web.minecraft-services.net/api/v1.0/download/links";
+    const { data } = await axios.get(BEDROCK_SERVICES_URL);
+    const link = data.result.links.find((l: any) => l.downloadType === "serverBedrockLinux");
+    if (!link) throw new Error("Bedrock Linux download link not found");
+    const targetPath = path.join(targetDir, "bedrock-server.zip");
+    const response = await axios({ url: link.downloadUrl, method: "GET", responseType: "stream" });
+    await streamPipeline(response.data, fs.createWriteStream(targetPath));
+    return targetPath;
+  }
+
+  if (type === "pocketmine") {
+    try {
+      const { data: releases } = await axios.get("https://api.github.com/repos/pmmp/PocketMine-MP/releases");
+      const latest = releases.find((r: any) => !r.prerelease);
+      if (!latest) throw new Error("No PocketMine release found");
+      const asset = latest.assets.find((a: any) => a.name.endsWith(".phar"));
+      if (!asset) throw new Error("No .phar file found");
+      const targetPath = path.join(targetDir, "PocketMine-MP.phar");
+      const response = await axios({ url: asset.browser_download_url, method: "GET", responseType: "stream" });
+      await streamPipeline(response.data, fs.createWriteStream(targetPath));
+      return targetPath;
+    } catch (e) {
+      throw new Error(`PocketMine download failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  if (type === "nukkit") {
+    try {
+      const { data: releases } = await axios.get("https://api.github.com/repos/CloudburstMC/Nukkit/releases");
+      const latest = releases.find((r: any) => !r.prerelease);
+      if (!latest) throw new Error("No Nukkit release found");
+      const asset = latest.assets.find((a: any) => a.name.endsWith(".jar"));
+      if (!asset) throw new Error("No .jar file found");
+      const targetPath = path.join(targetDir, "nukkit.jar");
+      const response = await axios({ url: asset.browser_download_url, method: "GET", responseType: "stream" });
+      await streamPipeline(response.data, fs.createWriteStream(targetPath));
+      return targetPath;
+    } catch (e) {
+      throw new Error(`Nukkit download failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  if (type === "cloudburst") {
+    try {
+      const { data: releases } = await axios.get("https://api.github.com/repos/CloudburstMC/Cloudburst/releases");
+      const latest = releases.find((r: any) => !r.prerelease);
+      if (!latest) throw new Error("No Cloudburst release found");
+      const asset = latest.assets.find((a: any) => a.name.endsWith(".jar"));
+      if (!asset) throw new Error("No .jar file found");
+      const targetPath = path.join(targetDir, "cloudburst.jar");
+      const response = await axios({ url: asset.browser_download_url, method: "GET", responseType: "stream" });
+      await streamPipeline(response.data, fs.createWriteStream(targetPath));
+      return targetPath;
+    } catch (e) {
+      throw new Error(`Cloudburst download failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   throw new Error(`Unknown server type: ${type}`);

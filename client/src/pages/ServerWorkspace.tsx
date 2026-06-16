@@ -255,9 +255,7 @@ function OverviewTab({ serverId, serverInfo, isOnline }: { serverId: number; ser
     return m[2].toLowerCase() === "g" ? val * 1024 : val;
   })();
 
-  const storageLimit = sysInfo?.totalDiskMB && sysInfo.totalDiskMB > 0
-    ? sysInfo.totalDiskMB
-    : (serverInfo?.storageLimit || 10240);
+  const storageLimit = serverInfo?.storageLimit || 10240;
 
   const formatMB = (mb: number) => {
     if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;

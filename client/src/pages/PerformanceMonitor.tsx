@@ -73,10 +73,8 @@ export default function PerformanceMonitor({ serverId, isOnline }: { serverId: n
   })();
 
   const ramLimit = xmxFromArgs;
-  // Storage limit: use real drive total if available, else fall back to configured
-  const storageLimit = (sysInfo?.totalDiskMB && sysInfo.totalDiskMB > 0)
-    ? sysInfo.totalDiskMB
-    : (serverInfo?.storageLimit || 10240);
+  // Storage limit: respect per-server storage limit
+  const storageLimit = serverInfo?.storageLimit || 10240;
 
   // Seed from DB history once
   const seeded = useRef(false);

@@ -111,7 +111,7 @@ export const appRouter = router({
     }),
 
     getAvailableVersions: protectedProcedure
-      .input(z.object({ type: z.enum(["java", "bedrock", "fabric", "paper", "purpur", "spigot", "forge", "neoforge"]) }))
+      .input(z.object({ type: z.enum(["java", "bedrock", "bedrock-linux", "fabric", "paper", "purpur", "spigot", "forge", "neoforge", "pocketmine", "nukkit", "cloudburst"]) }))
       .query(async ({ input }) => {
         return getVersionsByType(input.type as ServerType);
       }),
@@ -140,7 +140,7 @@ export const appRouter = router({
       .input(
         z.object({
           name: z.string(),
-          type: z.enum(["java", "bedrock", "fabric", "paper", "purpur", "spigot", "forge", "neoforge"]),
+          type: z.enum(["java", "bedrock", "bedrock-linux", "fabric", "paper", "purpur", "spigot", "forge", "neoforge", "pocketmine", "nukkit", "cloudburst"]),
           port: z.number(),
           maxPlayers: z.number(),
         })
@@ -802,6 +802,37 @@ export const appRouter = router({
             }));
           }
 
+
+          if (input.platform === "curseforge") {
+            try {
+              const classId = input.pluginType === "mod" ? 6 : 5; // 6 = Mods, 5 = Plugins
+              const searchParams = new URLSearchParams();
+              if (input.query) searchParams.set("searchFilter", input.query);
+              searchParams.set("pageSize", "20");
+              searchParams.set("classId", String(classId));
+              
+              const { data } = await axios.get(
+                `https://api.curseforge.com/v1/mods/search?${searchParams.toString()}`,
+                { headers: { "X-API-Key": process.env.CURSEFORGE_API_KEY || "" } }
+              );
+              
+              return (data.data || []).map((item: any) => ({
+                id: String(item.id),
+                name: item.name,
+                description: item.summary || "",
+                downloads: item.downloadCount || 0,
+                icon: item.logo?.url || null,
+                author: item.authors?.[0]?.name || "",
+                versions: item.latestFilesIndexes?.map((f: any) => f.gameVersion) || [],
+                source: "curseforge" as const,
+                projectUrl: item.links?.websiteUrl || "",
+                downloadUrl: null,
+              }));
+            } catch {
+              return [];
+            }
+          }
+
           return [];
         } catch (err) {
           console.error("Search error:", err);
@@ -842,8 +873,13 @@ export const appRouter = router({
             });
           }
 
-          const latest = versions[0];
-          const file = latest.files.find((f: any) => f.primary) || latest.files[0];
+          // If versionId is specified, find that specific version
+          let selectedVersion = versions[0];
+          if (input.versionId) {
+            selectedVersion = versions.find((v: any) => v.version_number === input.versionId || v.id === input.versionId) || versions[0];
+          }
+
+          const file = selectedVersion.files.find((f: any) => f.primary) || selectedVersion.files[0];
           if (!file) throw new TRPCError({ code: "BAD_REQUEST", message: "No downloadable file" });
           downloadUrl = file.url;
           fileName = file.filename;
@@ -870,10 +906,20 @@ export const appRouter = router({
           const { pipeline } = await import("node:stream/promises");
           await pipeline(response.data, fs.createWriteStream(targetPath));
 
+          // Extract version from fileName or use versionId
+          let pluginVersion = "1.0.0";
+          if (input.versionId) {
+            pluginVersion = input.versionId;
+          } else {
+            // Try to extract version from filename
+            const versionMatch = fileName.match(/[\d.]+/);
+            if (versionMatch) pluginVersion = versionMatch[0];
+          }
+
           await db.createPlugin({
             serverId: input.serverId,
             name: fileName.replace(/\.(jar|zip|mcaddon|mcpack)$/, ""),
-            version: "latest",
+            version: pluginVersion,
             enabled: 1,
           });
 

@@ -12,7 +12,7 @@ interface RunningServer {
   id: number;
   process: ChildProcess;
   logs: string[];
-  type: "java" | "bedrock" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge";
+  type: "java" | "bedrock" | "bedrock-linux" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge" | "pocketmine" | "nukkit" | "cloudburst";
   port: number;
 }
 
@@ -29,11 +29,16 @@ export async function getDirSizeMBAsync(dir: string): Promise<number> {
   try {
     if (!fs.existsSync(dir)) return 0;
 
-    // Use PowerShell on Windows for fast directory size calculation
-    const { stdout } = await execAsync(
-      `powershell -NoProfile -Command "(Get-ChildItem -Path '${dir.replace(/'/g, "''")}' -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum"`,
-      { timeout: 30000, maxBuffer: 1024 * 1024 }
-    );
+    let command: string;
+    if (process.platform === "win32") {
+      // Windows: Use PowerShell for fast directory size calculation
+      command = `powershell -NoProfile -Command "(Get-ChildItem -Path '${dir.replace(/'/g, "''")}' -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum"`;
+    } else {
+      // Unix/Linux/macOS: Use du command
+      command = `du -sb "${dir}" 2>/dev/null | awk '{print $1}'`;
+    }
+
+    const { stdout } = await execAsync(command, { timeout: 30000, maxBuffer: 1024 * 1024 });
     const bytes = parseInt(stdout.trim(), 10);
     if (isNaN(bytes)) return 0;
     return bytes / 1024 / 1024;
@@ -44,19 +49,27 @@ export async function getDirSizeMBAsync(dir: string): Promise<number> {
 
 function estimateTps(cpuUsage: number, isOnline: boolean): number {
   if (!isOnline) return 0;
+  // Estimate TPS based on CPU usage
+  // At <50% CPU: full 20 TPS
+  // At 50-85% CPU: linear degradation
+  // At >85% CPU: severe degradation
   let tps = 20.0;
-  if (cpuUsage > 85) {
-    const excessCpu = cpuUsage - 85;
-    tps -= excessCpu * 0.4;
+  if (cpuUsage > 50) {
+    if (cpuUsage > 85) {
+      const excessCpu = cpuUsage - 85;
+      tps = 20.0 - ((cpuUsage - 50) * 0.3) - (excessCpu * 0.5);
+    } else {
+      const excessCpu = cpuUsage - 50;
+      tps = 20.0 - (excessCpu * 0.2);
+    }
   }
-  tps += (Math.random() - 0.5) * 0.15;
   return Math.min(20.0, Math.max(1.0, Math.round(tps * 100) / 100));
 }
 
 // Check if a server is reachable via ping (more reliable than TCP socket)
 async function isServerReachable(port: number, type: string): Promise<boolean> {
   try {
-    if (type === "bedrock") {
+    if (type === "bedrock" || type === "bedrock-linux") {
       const bp = new BedrockPingClient();
       await bp.ping("localhost", port, AbortSignal.timeout(3000));
     } else {
@@ -193,12 +206,12 @@ setInterval(async () => {
   } catch {}
 }, 10000);
 
-export function startMinecraftServer(serverId: number, directory: string, type: "java" | "bedrock" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge", port: number, mcVersion: string, javaArgs = "-Xmx2G -Xms1G") {
+export function startMinecraftServer(serverId: number, directory: string, type: "java" | "bedrock" | "bedrock-linux" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge" | "pocketmine" | "nukkit" | "cloudburst", port: number, mcVersion: string, javaArgs = "-Xmx2G -Xms1G") {
   if (activeServers.has(serverId)) {
     throw new Error("Server is already running");
   }
 
-  if (type !== "bedrock") {
+  if (type !== "bedrock" && type !== "bedrock-linux") {
     try {
       const javaCheck = spawnSync("java", ["-version"], { encoding: "utf8" });
       const versionOutput = javaCheck.stderr || javaCheck.stdout;
@@ -218,6 +231,22 @@ export function startMinecraftServer(serverId: number, directory: string, type: 
     const exePath = path.join(directory, "bedrock_server.exe");
     if (!fs.existsSync(exePath)) throw new Error("bedrock_server.exe not found.");
     child = spawn(exePath, [], { cwd: directory });
+  } else if (type === "bedrock-linux") {
+    const exePath = path.join(directory, "bedrock_server");
+    if (!fs.existsSync(exePath)) throw new Error("bedrock_server not found.");
+    // Make executable and run
+    fs.chmodSync(exePath, 0o755);
+    child = spawn(exePath, [], { cwd: directory });
+  } else if (type === "pocketmine") {
+    const pharPath = path.join(directory, "PocketMine-MP.phar");
+    if (!fs.existsSync(pharPath)) throw new Error("PocketMine-MP.phar not found.");
+    child = spawn("php", [pharPath], { cwd: directory });
+  } else if (type === "nukkit" || type === "cloudburst") {
+    const jarName = type === "nukkit" ? "nukkit.jar" : "cloudburst.jar";
+    const jarPath = path.join(directory, jarName);
+    if (!fs.existsSync(jarPath)) throw new Error(`${jarName} not found.`);
+    fs.writeFileSync(path.join(directory, "eula.txt"), "eula=true");
+    child = spawn("java", [...javaArgs.split(" ").filter(Boolean), "-jar", jarName, "nogui"], { cwd: directory });
   } else {
     const jarPath = path.join(directory, "server.jar");
     if (!fs.existsSync(jarPath)) throw new Error("server.jar not found. Please download it first.");
@@ -411,6 +440,20 @@ export async function getLiveServerStats(serverId: number) {
     }).catch(() => {});
   }
 
+  // Try to get online player count
+  let playerCount = 0;
+  try {
+    if (dbServer.type === "bedrock" || dbServer.type === "bedrock-linux") {
+      const bp = new BedrockPingClient();
+      const pingResult = await bp.ping("localhost", port, AbortSignal.timeout(3000));
+      playerCount = pingResult?.playerCount || 0;
+    } else {
+      const jp = new JavaPingClient();
+      const pingResult = await jp.ping("localhost", port, { signal: AbortSignal.timeout(3000) });
+      playerCount = pingResult?.players?.online || 0;
+    }
+  } catch {}
+
   if (pid) {
     try {
       const stats = await pidusage(pid);
@@ -421,6 +464,7 @@ export async function getLiveServerStats(serverId: number) {
         disk: liveStatsCache.get(serverId)?.disk ?? disk,
         tps: estimateTps(cpu, dbServer.status === "online"),
         pid,
+        playerCount,
       };
       liveStatsCache.set(serverId, { ...result, ts: Date.now() });
       return result;
@@ -430,7 +474,7 @@ export async function getLiveServerStats(serverId: number) {
   // Return cached if fresh (< 15s)
   const cached = liveStatsCache.get(serverId);
   if (cached && Date.now() - cached.ts < 15000) {
-    return { cpu: cached.cpu, ram: cached.ram, disk: cached.disk, tps: cached.tps, pid: cached.pid };
+    return { cpu: cached.cpu, ram: cached.ram, disk: cached.disk, tps: cached.tps, pid: cached.pid, playerCount };
   }
 
   return null;

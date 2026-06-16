@@ -11,7 +11,7 @@ export const users = sqliteTable("users", {
    * Use this for relations between tables.
    */
   id: integer("id").primaryKey({ autoIncrement: true }),
-  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
+  /** OAuth identifier (openId) for third-party auth. Unique per user. */
   openId: text("openId").unique(),
   name: text("name"),
   email: text("email").unique(),
@@ -27,7 +27,7 @@ export const servers = sqliteTable("servers", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   ownerId: integer("ownerId").references(() => users.id).notNull(),
   name: text("name").notNull(),
-  type: text("type").notNull(), // 'java' | 'bedrock'
+  type: text("type").notNull(), // 'java' | 'bedrock' | 'bedrock-linux' | 'fabric' | 'paper' | 'purpur' | 'spigot' | 'forge' | 'neoforge' | 'pocketmine' | 'nukkit' | 'cloudburst'
   port: integer("port").notNull(),
   maxPlayers: integer("maxPlayers").default(20).notNull(),
   status: text("status").default("offline").notNull(), // 'online' | 'offline' | 'starting' | 'stopping'
