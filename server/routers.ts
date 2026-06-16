@@ -185,7 +185,8 @@ export const appRouter = router({
         }
 
         try {
-          startMinecraftServer(input.serverId, server.directory, server.type as any, server.port, server.version || "latest");
+          const javaArgs = server.javaArgs || "-Xmx2G -Xms1G";
+          startMinecraftServer(input.serverId, server.directory, server.type as any, server.port, server.version || "latest", javaArgs);
           await db.updateServer(input.serverId, { status: "online" });
           return { success: true, message: "Server started" };
         } catch (error) {
@@ -212,8 +213,9 @@ export const appRouter = router({
           throw new TRPCError({ code: "NOT_FOUND", message: "Server not found" });
         }
 
+        const javaArgs = server.javaArgs || "-Xmx2G -Xms1G";
         await db.updateServer(input.serverId, { status: "online" });
-        restartMinecraftServer(input.serverId, server.directory, server.type as any, server.port, server.version || "latest");
+        restartMinecraftServer(input.serverId, server.directory, server.type as any, server.port, server.version || "latest", javaArgs);
         return { success: true, message: "Server restarting gracefully (world saving)..." };
       }),
 
@@ -368,6 +370,32 @@ export const appRouter = router({
         fs.writeFileSync(propsPath, header + output + "\n", "utf8");
 
         return { success: true, message: "Properties saved. Restart server to apply." };
+      }),
+
+    updateJavaArgs: protectedProcedure
+      .input(z.object({
+        serverId: z.number(),
+        javaArgs: z.string().min(1),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const server = await db.getServerById(input.serverId);
+        if (!server) throw new TRPCError({ code: "NOT_FOUND", message: "Server not found" });
+        if (server.ownerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Not your server" });
+        await db.updateServer(input.serverId, { javaArgs: input.javaArgs });
+        return { success: true, message: "JVM args saved. Restart server to apply." };
+      }),
+
+    toggleAutoRestart: protectedProcedure
+      .input(z.object({
+        serverId: z.number(),
+        enabled: z.boolean(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const server = await db.getServerById(input.serverId);
+        if (!server) throw new TRPCError({ code: "NOT_FOUND", message: "Server not found" });
+        if (server.ownerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Not your server" });
+        await db.updateServer(input.serverId, { autoRestart: input.enabled ? 1 : 0 });
+        return { success: true };
       }),
   }),
 

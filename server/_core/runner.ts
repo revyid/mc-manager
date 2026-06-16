@@ -18,6 +18,28 @@ const archivedLogs = new Map<number, string[]>();
 const javaPingClient = new JavaPingClient();
 const bedrockPingClient = new BedrockPingClient();
 const pidCache = new Map<number, number>();
+// Tracks servers intentionally stopped (to not auto-restart them on exit)
+const intentionalStop = new Set<number>();
+
+// Recursively sum directory size (sync, shallow cap at depth 5)
+function getDirSizeMB(dir: string, depth = 0): number {
+  if (depth > 5) return 0;
+  let total = 0;
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      try {
+        if (e.isDirectory()) {
+          total += getDirSizeMB(full, depth + 1);
+        } else {
+          total += fs.statSync(full).size;
+        }
+      } catch {}
+    }
+  } catch {}
+  return total / 1024 / 1024;
+}
 
 // Check if a server is reachable via ping (more reliable than TCP socket)
 async function isServerReachable(port: number, type: string): Promise<boolean> {
@@ -114,6 +136,7 @@ setInterval(async () => {
       try {
         let cpu = 0;
         let ram = 0;
+        let disk = 0;
 
         const pid = getPidForServer(serverId, dbServer.port);
         if (pid) {
@@ -124,19 +147,24 @@ setInterval(async () => {
           } catch {}
         }
 
+        // Measure disk usage of server directory
+        if (dbServer.directory && fs.existsSync(dbServer.directory)) {
+          disk = Math.round(getDirSizeMB(dbServer.directory));
+        }
+
         await db.createMetric({
           serverId,
           cpu,
           ram,
           tps: 20,
-          disk: 0,
+          disk,
         });
       } catch {}
     }
   } catch {}
 }, 10000);
 
-export function startMinecraftServer(serverId: number, directory: string, type: "java" | "bedrock" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge", port: number, mcVersion: string, javaArgs: string = "-Xmx2G -Xms1G") {
+export function startMinecraftServer(serverId: number, directory: string, type: "java" | "bedrock" | "fabric" | "paper" | "purpur" | "spigot" | "forge" | "neoforge", port: number, mcVersion: string, javaArgs = "-Xmx2G -Xms1G") {
   if (activeServers.has(serverId)) {
     throw new Error("Server is already running");
   }
@@ -190,9 +218,46 @@ export function startMinecraftServer(serverId: number, directory: string, type: 
     archivedLogs.set(serverId, [...serverInfo.logs]);
   });
 
-  child.on("exit", (code) => {
+  child.on("exit", async (code) => {
     console.log(`[Server ${serverId}] Exited with code ${code}`);
     activeServers.delete(serverId);
+
+    const wasIntentional = intentionalStop.has(serverId);
+    intentionalStop.delete(serverId);
+
+    if (!wasIntentional) {
+      // Crash detected — check autoRestart flag
+      try {
+        const dbServer = await db.getServerById(serverId);
+        if (dbServer?.autoRestart === 1) {
+          console.log(`[Server ${serverId}] Crash detected, auto-restarting in 5s...`);
+          const log = `\n[MC Manager] Server crashed (exit code ${code}). Auto-restarting in 5 seconds...\n`;
+          const existing = archivedLogs.get(serverId) || [];
+          archivedLogs.set(serverId, [...existing, log]);
+          await db.updateServer(serverId, { status: "offline" });
+          setTimeout(() => {
+            if (activeServers.has(serverId)) return; // already restarted
+            try {
+              startMinecraftServer(
+                serverId,
+                dbServer.directory!,
+                dbServer.type as any,
+                dbServer.port,
+                dbServer.version || "latest",
+                dbServer.javaArgs || "-Xmx2G -Xms1G"
+              );
+              db.updateServer(serverId, { status: "online" }).catch(() => {});
+            } catch (err) {
+              console.error(`[Server ${serverId}] Auto-restart failed:`, err);
+            }
+          }, 5000);
+        } else {
+          await db.updateServer(serverId, { status: "offline" }).catch(() => {});
+        }
+      } catch (err) {
+        console.error(`[Server ${serverId}] Error in crash handler:`, err);
+      }
+    }
   });
 
   activeServers.set(serverId, serverInfo);
@@ -202,6 +267,7 @@ export function startMinecraftServer(serverId: number, directory: string, type: 
 export function stopMinecraftServer(serverId: number, graceful = true) {
   const server = activeServers.get(serverId);
   pidCache.delete(serverId);
+  intentionalStop.add(serverId); // mark as intentional so crash handler is skipped
 
   if (!server) return;
 
@@ -235,10 +301,10 @@ function forceKillProcess(server: RunningServer) {
   }
 }
 
-export function restartMinecraftServer(serverId: number, directory: string, type: RunningServer["type"], port: number, version: string) {
+export function restartMinecraftServer(serverId: number, directory: string, type: RunningServer["type"], port: number, version: string, javaArgs = "-Xmx2G -Xms1G") {
   const doStart = () => {
     try {
-      startMinecraftServer(serverId, directory, type, port, version);
+      startMinecraftServer(serverId, directory, type, port, version, javaArgs);
     } catch (err) {
       console.error(`[Server ${serverId}] Restart failed:`, err);
     }
@@ -286,7 +352,7 @@ export function sendCommand(serverId: number, command: string) {
   server.process.stdin.write(command + "\n");
 }
 
-const liveStatsCache = new Map<number, { cpu: number; ram: number; pid: number | null; ts: number }>();
+const liveStatsCache = new Map<number, { cpu: number; ram: number; disk: number; pid: number | null; ts: number }>();
 
 export async function getLiveServerStats(serverId: number) {
   const server = activeServers.get(serverId);
@@ -299,12 +365,19 @@ export async function getLiveServerStats(serverId: number) {
   // Try managed process first, then find PID from port
   const pid = server?.process?.pid || getPidForServer(serverId, port);
 
+  // Measure disk in background (non-blocking estimate)
+  let disk = liveStatsCache.get(serverId)?.disk ?? 0;
+  if (dbServer.directory && fs.existsSync(dbServer.directory)) {
+    try { disk = Math.round(getDirSizeMB(dbServer.directory)); } catch {}
+  }
+
   if (pid) {
     try {
       const stats = await pidusage(pid);
       const result = {
         cpu: Math.round(stats.cpu * 10) / 10,
         ram: Math.round(stats.memory / 1024 / 1024),
+        disk,
         pid,
       };
       liveStatsCache.set(serverId, { ...result, ts: Date.now() });
@@ -315,7 +388,7 @@ export async function getLiveServerStats(serverId: number) {
   // Return cached if fresh (< 15s)
   const cached = liveStatsCache.get(serverId);
   if (cached && Date.now() - cached.ts < 15000) {
-    return { cpu: cached.cpu, ram: cached.ram, pid: cached.pid };
+    return { cpu: cached.cpu, ram: cached.ram, disk: cached.disk, pid: cached.pid };
   }
 
   return null;

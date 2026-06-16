@@ -33,6 +33,8 @@ export const servers = sqliteTable("servers", {
   status: text("status").default("offline").notNull(), // 'online' | 'offline' | 'starting' | 'stopping'
   version: text("version"),
   directory: text("directory"),
+  javaArgs: text("javaArgs").default("-Xmx2G -Xms1G"),
+  autoRestart: integer("autoRestart").default(0).notNull(), // 0 = off, 1 = on
   createdAt: integer("createdAt", { mode: "timestamp" }).defaultNow().notNull(),
   updatedAt: integer("updatedAt", { mode: "timestamp" }).defaultNow().notNull(),
 });

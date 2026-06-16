@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
-import { Loader2, RefreshCw, Save, Info } from "lucide-react";
+import { Loader2, RefreshCw, Save, Info, Cpu } from "lucide-react";
 import { toast } from "sonner";
 
 const PROPERTY_META: Record<string, { type: "text" | "number" | "boolean" | "slider"; label: string; description?: string; min?: number; max?: number; category: string }> = {
@@ -68,6 +68,54 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
   const [properties, setProperties] = useState<Record<string, string>>({});
   const [hasChanges, setHasChanges] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // JVM args state
+  const [xmx, setXmx] = useState(2048); // in MB
+  const [xms, setXms] = useState(1024); // in MB
+  const [jvmDirty, setJvmDirty] = useState(false);
+  const [jvmSaving, setJvmSaving] = useState(false);
+  const [autoRestart, setAutoRestart] = useState(false);
+
+  const { data: serverInfo } = trpc.servers.list.useQuery(undefined, {
+    select: (data) => data.find((s) => s.id === serverId),
+  });
+
+  const updateJavaArgsMutation = trpc.servers.updateJavaArgs.useMutation({
+    onSuccess: () => { setJvmDirty(false); toast.success("JVM args saved! Restart server to apply."); },
+    onError: (e) => toast.error(e.message || "Failed to save JVM args"),
+  });
+
+  const toggleAutoRestartMutation = trpc.servers.toggleAutoRestart.useMutation({
+    onSuccess: (_, vars) => toast.success(`Auto-restart ${vars.enabled ? "enabled" : "disabled"}`),
+    onError: (e) => toast.error(e.message || "Failed to update auto-restart"),
+  });
+
+  // Parse javaArgs from server info
+  useEffect(() => {
+    if (!serverInfo) return;
+    if (serverInfo.javaArgs) {
+      const xmxMatch = serverInfo.javaArgs.match(/-Xmx(\d+)([MmGg])/);
+      const xmsMatch = serverInfo.javaArgs.match(/-Xms(\d+)([MmGg])/);
+      if (xmxMatch) {
+        const val = parseInt(xmxMatch[1]);
+        setXmx(xmxMatch[2].toLowerCase() === "g" ? val * 1024 : val);
+      }
+      if (xmsMatch) {
+        const val = parseInt(xmsMatch[1]);
+        setXms(xmsMatch[2].toLowerCase() === "g" ? val * 1024 : val);
+      }
+    }
+    setAutoRestart(serverInfo.autoRestart === 1);
+  }, [serverInfo?.javaArgs, serverInfo?.autoRestart]);
+
+  const handleSaveJvm = () => {
+    setJvmSaving(true);
+    const args = `-Xmx${xmx}M -Xms${xms}M`;
+    updateJavaArgsMutation.mutate(
+      { serverId, javaArgs: args },
+      { onSettled: () => setJvmSaving(false) }
+    );
+  };
 
   const { data, isLoading, refetch } = trpc.servers.getProperties.useQuery(
     { serverId },
@@ -132,6 +180,116 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
 
   return (
     <div className="space-y-5">
+      {/* JVM Settings */}
+      <Card className="rounded-xl border-blue-500/20">
+        <CardHeader className="pb-3 pt-4 px-5">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-blue-400" />
+            JVM Settings
+            <Badge variant="outline" className="text-xs text-blue-400 border-blue-500/30">Java Only</Badge>
+          </CardTitle>
+          <p className="text-xs text-muted-foreground mt-0.5">Configure JVM memory for the Minecraft server process. Changes apply on next restart.</p>
+        </CardHeader>
+        <Separator />
+        <CardContent className="p-5 space-y-5">
+          {/* Xmx */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-xs font-medium">Max RAM (Xmx)</Label>
+                <p className="text-xs text-muted-foreground">Maximum heap size allocated to the server</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  value={xmx}
+                  min={512}
+                  max={65536}
+                  step={256}
+                  className="h-8 text-sm font-mono w-24"
+                  onChange={(e) => { setXmx(Number(e.target.value)); setJvmDirty(true); }}
+                />
+                <span className="text-xs text-muted-foreground">MB ({(xmx / 1024).toFixed(1)} GB)</span>
+              </div>
+            </div>
+            <Slider
+              value={[xmx]}
+              onValueChange={([v]) => { setXmx(v); setJvmDirty(true); }}
+              min={512} max={32768} step={256}
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>512 MB</span><span className="font-medium text-foreground">{xmx} MB</span><span>32 GB</span>
+            </div>
+          </div>
+
+          {/* Xms */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-xs font-medium">Initial RAM (Xms)</Label>
+                <p className="text-xs text-muted-foreground">Initial heap size — should be ≤ Max RAM</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  value={xms}
+                  min={256}
+                  max={xmx}
+                  step={256}
+                  className="h-8 text-sm font-mono w-24"
+                  onChange={(e) => { setXms(Math.min(Number(e.target.value), xmx)); setJvmDirty(true); }}
+                />
+                <span className="text-xs text-muted-foreground">MB ({(xms / 1024).toFixed(1)} GB)</span>
+              </div>
+            </div>
+            <Slider
+              value={[xms]}
+              onValueChange={([v]) => { setXms(v); setJvmDirty(true); }}
+              min={256} max={xmx} step={256}
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>256 MB</span><span className="font-medium text-foreground">{xms} MB</span><span>{xmx} MB</span>
+            </div>
+          </div>
+
+          {/* Preview & Save */}
+          <div className="flex items-center justify-between pt-1">
+            <code className="text-xs text-muted-foreground bg-muted rounded px-2 py-1 font-mono">
+              -Xmx{xmx}M -Xms{xms}M
+            </code>
+            <Button
+              size="sm"
+              className="gap-1.5 h-8 bg-blue-600 text-white hover:bg-blue-700"
+              onClick={handleSaveJvm}
+              disabled={!jvmDirty || jvmSaving}
+            >
+              {jvmSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              Save JVM Args
+            </Button>
+          </div>
+
+          <Separator />
+
+          {/* Auto-Restart on Crash */}
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-xs font-medium">Auto-Restart on Crash</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Otomatis restart server jika crash — tidak berlaku saat stop manual
+              </p>
+            </div>
+            <Switch
+              checked={autoRestart}
+              onCheckedChange={(v) => {
+                setAutoRestart(v);
+                toggleAutoRestartMutation.mutate({ serverId, enabled: v });
+              }}
+              disabled={toggleAutoRestartMutation.isPending}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-base font-semibold">Server Properties</h2>

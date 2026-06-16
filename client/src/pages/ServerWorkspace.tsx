@@ -239,22 +239,32 @@ function OverviewTab({ serverId, serverInfo, isOnline }: { serverId: number; ser
     { enabled: isAuthenticated && isOnline, refetchInterval: 5000 }
   );
 
+  const liveAny = live as any;
   const latest = metrics[metrics.length - 1];
-  const playerCount = (live as any)?.players ?? 0;
+  const playerCount = liveAny?.players ?? 0;
+
+  // Prefer live data, then fall back to most recent metric
+  const cpuVal = liveAny?.cpu != null ? `${liveAny.cpu}%` : (latest ? `${latest.cpu}%` : "—");
+  const ramVal = liveAny?.ram != null ? `${liveAny.ram} MB` : (latest ? `${latest.ram} MB` : "—");
+  const diskVal = liveAny?.disk != null
+    ? (liveAny.disk >= 1024 ? `${(liveAny.disk / 1024).toFixed(2)} GB` : `${liveAny.disk} MB`)
+    : (latest?.disk ? (latest.disk >= 1024 ? `${(latest.disk / 1024).toFixed(2)} GB` : `${latest.disk} MB`) : "—");
+  const tpsVal = latest ? `${latest.tps}` : "—";
 
   const stats = [
     { label: "Status", value: isOnline ? "Online" : "Offline", accent: isOnline },
     { label: "Players", value: `${playerCount} / ${serverInfo.maxPlayers}` },
-    { label: "CPU", value: latest ? `${latest.cpu}%` : (live ? "0%" : "—") },
-    { label: "RAM", value: latest ? `${latest.ram} MB` : (live ? "0 MB" : "—") },
-    { label: "TPS", value: latest ? `${latest.tps}` : "—" },
+    { label: "CPU", value: cpuVal },
+    { label: "RAM", value: ramVal },
+    { label: "Disk", value: diskVal },
+    { label: "TPS", value: tpsVal },
     { label: "Version", value: serverInfo.version || "Unknown" },
     { label: "Type", value: serverInfo.type.toUpperCase() },
     { label: "Port", value: String(serverInfo.port) },
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
       {stats.map(({ label, value, accent }) => (
         <Card key={label} className="stat-card">
           <CardContent className="p-0">
