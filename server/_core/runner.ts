@@ -1,9 +1,12 @@
-import { spawn, spawnSync, ChildProcess, execSync } from "node:child_process";
+import { spawn, spawnSync, ChildProcess, exec, execSync } from "node:child_process";
+import { promisify } from "node:util";
 import path from "node:path";
 import fs from "node:fs";
 import pidusage from "pidusage";
 import { JavaPingClient, BedrockPingClient } from "craftping";
 import * as db from "../db";
+
+const execAsync = promisify(exec);
 
 interface RunningServer {
   id: number;
@@ -21,33 +24,22 @@ const pidCache = new Map<number, number>();
 // Tracks servers intentionally stopped (to not auto-restart them on exit)
 const intentionalStop = new Set<number>();
 
-// Recursively sum directory size (async, non-blocking, shallow cap at depth 20)
-export async function getDirSizeMBAsync(dir: string, depth = 0): Promise<number> {
-  if (depth > 20) return 0;
-  let total = 0;
-  let entries: fs.Dirent[] = [];
+// Get directory size using OS-level command (much faster than recursive Node.js traversal)
+export async function getDirSizeMBAsync(dir: string): Promise<number> {
   try {
-    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    if (!fs.existsSync(dir)) return 0;
+
+    // Use PowerShell on Windows for fast directory size calculation
+    const { stdout } = await execAsync(
+      `powershell -NoProfile -Command "(Get-ChildItem -Path '${dir.replace(/'/g, "''")}' -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum"`,
+      { timeout: 30000, maxBuffer: 1024 * 1024 }
+    );
+    const bytes = parseInt(stdout.trim(), 10);
+    if (isNaN(bytes)) return 0;
+    return bytes / 1024 / 1024;
   } catch {
     return 0;
   }
-  const sizes = await Promise.all(
-    entries.map(async (e) => {
-      const full = path.join(dir, e.name);
-      try {
-        if (e.isDirectory()) {
-          return await getDirSizeMBAsync(full, depth + 1);
-        } else {
-          const stat = await fs.promises.stat(full);
-          return stat.size;
-        }
-      } catch {
-        return 0;
-      }
-    })
-  );
-  total = sizes.reduce((a, b) => a + b, 0);
-  return total / 1024 / 1024;
 }
 
 function estimateTps(cpuUsage: number, isOnline: boolean): number {

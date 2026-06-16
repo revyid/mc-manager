@@ -107,9 +107,10 @@ function AppSidebar() {
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
       <SidebarHeader className="border-b border-sidebar-border">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" className="hover:bg-sidebar-accent">
+        <div className="flex items-center gap-2 p-2">
+          <SidebarTrigger className="h-7 w-7 shrink-0 hover:bg-sidebar-accent rounded-md" />
+          {!isCollapsed && (
+            <div className="flex items-center gap-2 flex-1 min-w-0">
               <div className="flex aspect-square h-8 w-8 items-center justify-center rounded-lg bg-accent text-white shrink-0">
                 <Globe className="h-4 w-4" />
               </div>
@@ -117,10 +118,9 @@ function AppSidebar() {
                 <span className="font-semibold text-sm">MC Manager</span>
                 <span className="text-xs text-sidebar-foreground/60">v2.0</span>
               </div>
-              <SidebarTrigger className="h-6 w-6 shrink-0 hover:bg-sidebar-accent rounded-md" />
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+            </div>
+          )}
+        </div>
       </SidebarHeader>
 
       <SidebarContent>
