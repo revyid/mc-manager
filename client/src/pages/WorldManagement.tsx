@@ -77,7 +77,7 @@ export default function WorldManagement({ serverId }: { serverId: number }) {
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-sm">{world.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {world.size || "Unknown size"} · Modified {new Date(world.lastModified).toLocaleDateString()}
+                      {(world.size && world.size !== "0.0 MB") ? world.size : "Calculating..."} · Modified {new Date(world.lastModified).toLocaleDateString()}
                     </p>
                   </div>
                   <Button

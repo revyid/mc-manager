@@ -156,7 +156,6 @@ setInterval(async () => {
       try {
         let cpu = 0;
         let ram = 0;
-        let disk = 0;
         let tps = dbServer.status === "online" ? 20 : 0;
 
         const pid = getPidForServer(serverId, dbServer.port);
@@ -170,18 +169,21 @@ setInterval(async () => {
         }
 
         // Measure disk usage of server directory asynchronously
+        let freshDisk = 0;
         if (dbServer.directory && fs.existsSync(dbServer.directory)) {
           try {
-            disk = Math.round(await getDirSizeMBAsync(dbServer.directory));
+            freshDisk = Math.round(await getDirSizeMBAsync(dbServer.directory));
           } catch {}
         }
 
-        // Update live stats cache so getLiveServerStats can use it immediately!
+        // Only update disk cache with a valid value (>0). If scan returned 0, keep previous.
         const current = liveStatsCache.get(serverId) || { cpu: 0, ram: 0, disk: 0, tps: 0, pid: null, ts: 0 };
+        const disk = freshDisk > 0 ? freshDisk : current.disk;
+
         liveStatsCache.set(serverId, {
           cpu,
           ram,
-          disk: disk || current.disk,
+          disk,
           tps,
           pid: pid || null,
           ts: Date.now(),
@@ -402,14 +404,18 @@ export async function getLiveServerStats(serverId: number) {
 
   // Get disk from cache, or queue an async scan if not available
   let disk = liveStatsCache.get(serverId)?.disk ?? 0;
-  if (disk === 0 && dbServer.directory && fs.existsSync(dbServer.directory)) {
+  const cacheTs = liveStatsCache.get(serverId)?.ts ?? 0;
+  // Trigger a fresh disk scan if disk is 0 or cache is stale (>30s old)
+  if ((disk === 0 || Date.now() - cacheTs > 30000) && dbServer.directory && fs.existsSync(dbServer.directory)) {
     getDirSizeMBAsync(dbServer.directory).then((size) => {
-      const current = liveStatsCache.get(serverId) || { cpu: 0, ram: 0, disk: 0, tps: 0, pid: null, ts: 0 };
-      liveStatsCache.set(serverId, {
-        ...current,
-        disk: Math.round(size),
-        ts: Date.now(),
-      });
+      if (size > 0) {
+        const current = liveStatsCache.get(serverId) || { cpu: 0, ram: 0, disk: 0, tps: 0, pid: null, ts: 0 };
+        liveStatsCache.set(serverId, {
+          ...current,
+          disk: Math.round(size),
+          ts: Date.now(),
+        });
+      }
     }).catch(() => {});
   }
 

@@ -11,6 +11,8 @@ import { getVersionsByType, downloadServerJar, ServerType } from "./_core/minecr
 import { startMinecraftServer, stopMinecraftServer, restartMinecraftServer, isServerRunning, sendCommand, getServerLogs, getLiveServerStats, getDirSizeMBAsync } from "./_core/runner";
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
+import { execSync } from "node:child_process";
 import axios from "axios";
 
 export const appRouter = router({
@@ -411,6 +413,46 @@ export const appRouter = router({
         await db.updateServer(input.serverId, { ramLimit: input.ramLimit, storageLimit: input.storageLimit });
         return { success: true, message: "Resource limits updated successfully." };
       }),
+
+    getSystemInfo: protectedProcedure.query(async () => {
+      const totalRamMB = Math.round(os.totalmem() / 1024 / 1024);
+      const freeRamMB = Math.round(os.freemem() / 1024 / 1024);
+      const cpuModel = os.cpus()[0]?.model || "Unknown CPU";
+      const cpuCores = os.cpus().length;
+
+      let totalDiskMB = 0;
+      let freeDiskMB = 0;
+
+      try {
+        if (process.platform === "win32") {
+          // Get drive letter of the process working directory
+          const driveLetter = path.parse(process.cwd()).root.slice(0, 2); // e.g. "C:"
+          const out = execSync(
+            `wmic logicaldisk where "Caption='${driveLetter}'" get FreeSpace,Size /value 2>nul`,
+            { encoding: "utf8", timeout: 5000, windowsHide: true }
+          );
+          const freeMatch = out.match(/FreeSpace=(\d+)/);
+          const sizeMatch = out.match(/Size=(\d+)/);
+          if (freeMatch) freeDiskMB = Math.round(parseInt(freeMatch[1]) / 1024 / 1024);
+          if (sizeMatch) totalDiskMB = Math.round(parseInt(sizeMatch[1]) / 1024 / 1024);
+        } else {
+          const targetPath = fs.existsSync(path.join(process.cwd(), "instances"))
+            ? path.join(process.cwd(), "instances")
+            : process.cwd();
+          const out = execSync(`df -Pk "${targetPath}"`, { encoding: "utf8", timeout: 5000 });
+          const lines = out.trim().split("\n");
+          if (lines.length >= 2) {
+            const parts = lines[lines.length - 1].trim().split(/\s+/);
+            if (parts.length >= 4) {
+              totalDiskMB = Math.round(parseInt(parts[1]) / 1024);
+              freeDiskMB = Math.round(parseInt(parts[3]) / 1024);
+            }
+          }
+        }
+      } catch {}
+
+      return { totalRamMB, freeRamMB, totalDiskMB, freeDiskMB, cpuModel, cpuCores };
+    }),
   }),
 
   players: router({

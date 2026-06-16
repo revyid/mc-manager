@@ -58,8 +58,25 @@ export default function PerformanceMonitor({ serverId, isOnline }: { serverId: n
     select: (data) => data.find((s) => s.id === serverId),
   });
 
-  const ramLimit = serverInfo?.ramLimit || 4096; // in MB
-  const storageLimit = serverInfo?.storageLimit || 10240; // in MB
+  const { data: sysInfo } = trpc.servers.getSystemInfo.useQuery(undefined, {
+    enabled: isAuthenticated,
+    staleTime: 60000,
+  });
+
+  // Parse xmx from javaArgs for accurate RAM limit (synced with JVM settings)
+  const xmxFromArgs = (() => {
+    const args = serverInfo?.javaArgs ?? "";
+    const m = args.match(/-Xmx(\d+)([MmGg])/);
+    if (!m) return serverInfo?.ramLimit || 4096;
+    const val = parseInt(m[1]);
+    return m[2].toLowerCase() === "g" ? val * 1024 : val;
+  })();
+
+  const ramLimit = xmxFromArgs;
+  // Storage limit: use real drive total if available, else fall back to configured
+  const storageLimit = (sysInfo?.totalDiskMB && sysInfo.totalDiskMB > 0)
+    ? sysInfo.totalDiskMB
+    : (serverInfo?.storageLimit || 10240);
 
   // Seed from DB history once
   const seeded = useRef(false);
@@ -100,12 +117,15 @@ export default function PerformanceMonitor({ serverId, isOnline }: { serverId: n
 
   const latestDisk = (latest?.disk as number) ?? 0;
   const avgDisk = avg("disk");
+  const latestRam = (latest?.ram as number) ?? 0;
+
+  const fmtMB = (mb: number) => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
 
   const statCards = [
     { label: "CPU", value: `${latest?.cpu ?? 0}%`, avg: `avg ${avg("cpu")}%`, color: "text-blue-400", warn: latest && (latest.cpu as number) > 80 },
-    { label: "RAM", value: `${latest?.ram ?? 0} MB / ${ramLimit} MB`, avg: `avg ${avg("ram")} MB`, color: "text-purple-400", warn: latest && (latest.ram as number) > (ramLimit * 0.9) },
+    { label: "RAM", value: `${fmtMB(latestRam)} / ${fmtMB(ramLimit)}`, avg: `avg ${fmtMB(avg("ram"))}`, color: "text-purple-400", warn: latest && (latestRam) > (ramLimit * 0.9) },
     { label: "TPS", value: points.length ? (latest?.tps ?? 20) : 0, avg: `avg ${avg("tps")}`, color: "text-green-400" },
-    { label: "Disk", value: `${formatDisk(latestDisk)} / ${formatDisk(storageLimit)}`, avg: `avg ${formatDisk(avgDisk)}`, color: "text-orange-400", warn: latest && (latestDisk as number) > (storageLimit * 0.9) },
+    { label: "Disk", value: `${fmtMB(latestDisk)} / ${fmtMB(storageLimit)}`, avg: `avg ${fmtMB(avgDisk)}`, color: "text-orange-400", warn: latest && (latestDisk as number) > (storageLimit * 0.9) },
     { label: "Samples", value: points.length, avg: null, color: "text-zinc-400" },
   ];
 

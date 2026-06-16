@@ -72,9 +72,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <AppSidebar />
       <SidebarInset>
         <header className="flex h-12 items-center gap-3 border-b border-border px-4 sticky top-0 z-30 bg-background/95 backdrop-blur shrink-0">
-          <SidebarTrigger className="-ml-1 h-8 w-8" />
-          <div className="h-4 w-px bg-border" />
-          <span className="text-sm text-muted-foreground truncate">MC Server Manager</span>
+          <span className="text-sm font-medium truncate">MC Server Manager</span>
         </header>
         <main className="flex-1 p-4 sm:p-6 bg-background min-h-[calc(100vh-48px)] overflow-x-hidden overflow-y-auto">{children}</main>
       </SidebarInset>
@@ -115,10 +113,11 @@ function AppSidebar() {
               <div className="flex aspect-square h-8 w-8 items-center justify-center rounded-lg bg-accent text-white shrink-0">
                 <Globe className="h-4 w-4" />
               </div>
-              <div className="flex flex-col gap-0.5 leading-none">
+              <div className="flex flex-col gap-0.5 leading-none flex-1 min-w-0">
                 <span className="font-semibold text-sm">MC Manager</span>
                 <span className="text-xs text-sidebar-foreground/60">v2.0</span>
               </div>
+              <SidebarTrigger className="h-6 w-6 shrink-0 hover:bg-sidebar-accent rounded-md" />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

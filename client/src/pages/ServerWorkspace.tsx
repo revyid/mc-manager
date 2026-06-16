@@ -238,30 +238,49 @@ function OverviewTab({ serverId, serverInfo, isOnline }: { serverId: number; ser
     { serverId },
     { enabled: isAuthenticated && isOnline, refetchInterval: 5000 }
   );
+  const { data: sysInfo } = trpc.servers.getSystemInfo.useQuery(undefined, {
+    staleTime: 60000,
+  });
 
   const liveAny = live as any;
   const latest = metrics[metrics.length - 1];
   const playerCount = liveAny?.players ?? 0;
 
-  const ramLimit = serverInfo.ramLimit || 4096;
-  const storageLimit = serverInfo.storageLimit || 10240;
+  // Parse xmx directly from javaArgs for accurate RAM limit (always synced)
+  const xmxFromArgs = (() => {
+    const args = serverInfo?.javaArgs ?? "";
+    const m = args.match(/-Xmx(\d+)([MmGg])/);
+    if (!m) return serverInfo?.ramLimit || 4096;
+    const val = parseInt(m[1]);
+    return m[2].toLowerCase() === "g" ? val * 1024 : val;
+  })();
 
-  // Prefer live data, then fall back to most recent metric
-  const cpuVal = liveAny?.cpu != null ? `${liveAny.cpu}%` : (latest ? `${latest.cpu}%` : "—");
-  
-  const ramVal = liveAny?.ram != null 
-    ? `${liveAny.ram} MB / ${ramLimit} MB` 
-    : (latest ? `${latest.ram} MB / ${ramLimit} MB` : `— / ${ramLimit} MB`);
+  const storageLimit = sysInfo?.totalDiskMB && sysInfo.totalDiskMB > 0
+    ? sysInfo.totalDiskMB
+    : (serverInfo?.storageLimit || 10240);
 
-  const formatDiskVal = (mb: number) => {
-    if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
+  const formatMB = (mb: number) => {
+    if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
     return `${mb} MB`;
   };
 
-  const diskValCurrent = liveAny?.disk != null ? liveAny.disk : (latest?.disk ? latest.disk : null);
-  const diskVal = diskValCurrent != null 
-    ? `${formatDiskVal(diskValCurrent)} / ${formatDiskVal(storageLimit)}` 
-    : `— / ${formatDiskVal(storageLimit)}`;
+  // Prefer live data, fall back to most recent metric
+  const cpuVal = liveAny?.cpu != null ? `${liveAny.cpu}%` : (latest ? `${latest.cpu}%` : "—");
+
+  const ramUsed = (liveAny?.ram != null && liveAny.ram > 0)
+    ? liveAny.ram
+    : (latest?.ram && latest.ram > 0 ? latest.ram : null);
+  const ramVal = ramUsed != null
+    ? `${formatMB(ramUsed)} / ${formatMB(xmxFromArgs)}`
+    : `— / ${formatMB(xmxFromArgs)}`;
+
+  // Treat disk=0 as not-yet-loaded
+  const diskUsed = (liveAny?.disk != null && liveAny.disk > 0)
+    ? liveAny.disk
+    : (latest?.disk && latest.disk > 0 ? latest.disk : null);
+  const diskVal = diskUsed != null
+    ? `${formatMB(diskUsed)} / ${formatMB(storageLimit)}`
+    : `— / ${formatMB(storageLimit)}`;
 
   const tpsVal = latest ? `${latest.tps}` : "—";
 
@@ -290,3 +309,4 @@ function OverviewTab({ serverId, serverInfo, isOnline }: { serverId: number; ser
     </div>
   );
 }
+

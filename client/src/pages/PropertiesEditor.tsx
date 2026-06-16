@@ -88,6 +88,17 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
     select: (data) => data.find((s) => s.id === serverId),
   });
 
+  const { data: sysInfo } = trpc.servers.getSystemInfo.useQuery(undefined, {
+    staleTime: 60000, // cache 1 minute
+  });
+
+  // Derived real caps from device
+  const systemRamMB = sysInfo?.totalRamMB ?? 0;
+  const systemDiskMB = sysInfo?.totalDiskMB ?? 0;
+  const freeDiskMB = sysInfo?.freeDiskMB ?? 0;
+  const xmxMax = systemRamMB > 0 ? Math.min(systemRamMB, 65536) : 32768;
+  const diskMax = systemDiskMB > 0 ? Math.min(systemDiskMB, 2 * 1024 * 1024) : 102400;
+
   const updateJavaArgsMutation = trpc.servers.updateJavaArgs.useMutation({
     onSuccess: () => { setJvmDirty(false); toast.success("JVM args saved! Restart server to apply."); },
     onError: (e) => toast.error(e.message || "Failed to save JVM args"),
@@ -110,12 +121,14 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
   // Parse javaArgs and resource limits from server info
   useEffect(() => {
     if (!serverInfo) return;
+    let parsedXmx = xmx;
     if (serverInfo.javaArgs) {
       const xmxMatch = serverInfo.javaArgs.match(/-Xmx(\d+)([MmGg])/);
       const xmsMatch = serverInfo.javaArgs.match(/-Xms(\d+)([MmGg])/);
       if (xmxMatch) {
         const val = parseInt(xmxMatch[1]);
-        setXmx(xmxMatch[2].toLowerCase() === "g" ? val * 1024 : val);
+        parsedXmx = xmxMatch[2].toLowerCase() === "g" ? val * 1024 : val;
+        setXmx(parsedXmx);
       }
       if (xmsMatch) {
         const val = parseInt(xmsMatch[1]);
@@ -123,13 +136,25 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
       }
     }
     setAutoRestart(serverInfo.autoRestart === 1);
-    if (serverInfo.ramLimit !== undefined) {
-      setRamLimit(serverInfo.ramLimit);
-    }
+    // ramLimit should always equal xmx for proper syncing
+    const effectiveRamLimit = serverInfo.ramLimit && serverInfo.ramLimit !== 4096
+      ? serverInfo.ramLimit
+      : parsedXmx;
+    setRamLimit(effectiveRamLimit);
     if (serverInfo.storageLimit !== undefined) {
       setStorageLimit(serverInfo.storageLimit);
     }
   }, [serverInfo?.javaArgs, serverInfo?.autoRestart, serverInfo?.ramLimit, serverInfo?.storageLimit]);
+
+  // When system info loads, auto-set storageLimit from real disk if still at default
+  useEffect(() => {
+    if (!sysInfo || !systemDiskMB) return;
+    setStorageLimit((prev) => {
+      // Only auto-set if still at the hardcoded default (10240 = 10 GB)
+      if (prev === 10240 && systemDiskMB > 0) return systemDiskMB;
+      return prev;
+    });
+  }, [systemDiskMB]);
 
   const handleSaveLimits = () => {
     setLimitsSaving(true);
@@ -142,9 +167,22 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
   const handleSaveJvm = () => {
     setJvmSaving(true);
     const args = `-Xmx${xmx}M -Xms${xms}M`;
+    // Also sync ramLimit with xmx so the overview gauge matches
+    if (xmx !== ramLimit) {
+      setRamLimit(xmx);
+      setLimitsDirty(true);
+    }
     updateJavaArgsMutation.mutate(
       { serverId, javaArgs: args },
-      { onSettled: () => setJvmSaving(false) }
+      {
+        onSettled: () => setJvmSaving(false),
+        onSuccess: () => {
+          // Save resource limits too so ramLimit is persisted
+          if (xmx !== ramLimit) {
+            updateResourceLimitsMutation.mutate({ serverId, ramLimit: xmx, storageLimit });
+          }
+        },
+      }
     );
   };
 
@@ -218,6 +256,11 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
             <Cpu className="w-4 h-4 text-blue-400" />
             JVM Settings
             <Badge variant="outline" className="text-xs text-blue-400 border-blue-500/30">Java Only</Badge>
+            {sysInfo && (
+              <Badge variant="outline" className="text-xs ml-auto font-normal">
+                System: {(sysInfo.totalRamMB / 1024).toFixed(0)} GB RAM · {sysInfo.freeRamMB > 0 ? `${(sysInfo.freeRamMB / 1024).toFixed(1)} GB free` : ""}
+              </Badge>
+            )}
           </CardTitle>
           <p className="text-xs text-muted-foreground mt-0.5">Configure JVM memory for the Minecraft server process. Changes apply on next restart.</p>
         </CardHeader>
@@ -235,10 +278,10 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
                   type="number"
                   value={xmx}
                   min={512}
-                  max={65536}
+                  max={xmxMax}
                   step={256}
                   className="h-8 text-sm font-mono w-24"
-                  onChange={(e) => { setXmx(Number(e.target.value)); setJvmDirty(true); }}
+                  onChange={(e) => { setXmx(Math.min(Number(e.target.value), xmxMax)); setJvmDirty(true); }}
                 />
                 <span className="text-xs text-muted-foreground">MB ({(xmx / 1024).toFixed(1)} GB)</span>
               </div>
@@ -246,10 +289,12 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
             <Slider
               value={[xmx]}
               onValueChange={([v]) => { setXmx(v); setJvmDirty(true); }}
-              min={512} max={32768} step={256}
+              min={512} max={xmxMax} step={256}
             />
             <div className="flex justify-between text-xs text-muted-foreground">
-              <span>512 MB</span><span className="font-medium text-foreground">{xmx} MB</span><span>32 GB</span>
+              <span>512 MB</span>
+              <span className="font-medium text-foreground">{xmx} MB ({(xmx / 1024).toFixed(1)} GB)</span>
+              <span>{systemRamMB > 0 ? `${(xmxMax / 1024).toFixed(0)} GB (system max)` : "32 GB"}</span>
             </div>
           </div>
 
@@ -306,7 +351,7 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
             <div>
               <Label className="text-xs font-medium">Auto-Restart on Crash</Label>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Otomatis restart server jika crash — tidak berlaku saat stop manual
+                Automatically restart the server on crash — not triggered by manual stop
               </p>
             </div>
             <Switch
@@ -328,24 +373,29 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
             <HardDrive className="w-4 h-4 text-orange-400" />
             Resource Allocation Limits
             <Badge variant="outline" className="text-xs text-orange-400 border-orange-500/30">Dashboard Display</Badge>
+            {sysInfo && systemDiskMB > 0 && (
+              <Badge variant="outline" className="text-xs ml-auto font-normal">
+                Drive: {(systemDiskMB / 1024).toFixed(0)} GB total · {(freeDiskMB / 1024).toFixed(1)} GB free
+              </Badge>
+            )}
           </CardTitle>
-          <p className="text-xs text-muted-foreground mt-0.5">Customize the RAM and Storage limits displayed on the Performance Monitor dashboard.</p>
+          <p className="text-xs text-muted-foreground mt-0.5">RAM limit is auto-synced with JVM Xmx. Storage limit is detected from your drive.</p>
         </CardHeader>
         <Separator />
         <CardContent className="p-5 space-y-5">
-          {/* RAM Limit */}
+          {/* RAM Limit — auto-synced with xmx */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <div>
                 <Label className="text-xs font-medium">Dashboard RAM Limit</Label>
-                <p className="text-xs text-muted-foreground">Allocated RAM limit for gauge display</p>
+                <p className="text-xs text-muted-foreground">Auto-synced with JVM Max RAM (Xmx) — {xmx} MB</p>
               </div>
               <div className="flex items-center gap-2">
                 <Input
                   type="number"
                   value={ramLimit}
                   min={512}
-                  max={65536}
+                  max={xmxMax}
                   step={256}
                   className="h-8 text-sm font-mono w-24"
                   onChange={(e) => { setRamLimit(Number(e.target.value)); setLimitsDirty(true); }}
@@ -356,10 +406,12 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
             <Slider
               value={[ramLimit]}
               onValueChange={([v]) => { setRamLimit(v); setLimitsDirty(true); }}
-              min={512} max={32768} step={256}
+              min={512} max={xmxMax} step={256}
             />
             <div className="flex justify-between text-xs text-muted-foreground">
-              <span>512 MB</span><span className="font-medium text-foreground">{ramLimit} MB</span><span>32 GB</span>
+              <span>512 MB</span>
+              <span className="font-medium text-foreground">{ramLimit} MB</span>
+              <span>{systemRamMB > 0 ? `${(xmxMax / 1024).toFixed(0)} GB (system max)` : "32 GB"}</span>
             </div>
           </div>
 
@@ -368,17 +420,21 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
             <div className="flex items-center justify-between">
               <div>
                 <Label className="text-xs font-medium">Dashboard Storage Limit</Label>
-                <p className="text-xs text-muted-foreground">Allocated disk space limit for gauge display</p>
+                <p className="text-xs text-muted-foreground">
+                  {systemDiskMB > 0
+                    ? `Total drive: ${(systemDiskMB / 1024).toFixed(1)} GB · ${(freeDiskMB / 1024).toFixed(1)} GB free`
+                    : "Allocated disk space limit for gauge display"}
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 <Input
                   type="number"
                   value={storageLimit}
                   min={1024}
-                  max={1048576}
+                  max={diskMax}
                   step={1024}
                   className="h-8 text-sm font-mono w-24"
-                  onChange={(e) => { setStorageLimit(Number(e.target.value)); setLimitsDirty(true); }}
+                  onChange={(e) => { setStorageLimit(Math.min(Number(e.target.value), diskMax)); setLimitsDirty(true); }}
                 />
                 <span className="text-xs text-muted-foreground">MB ({(storageLimit / 1024).toFixed(1)} GB)</span>
               </div>
@@ -386,10 +442,12 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
             <Slider
               value={[storageLimit]}
               onValueChange={([v]) => { setStorageLimit(v); setLimitsDirty(true); }}
-              min={1024} max={102400} step={1024}
+              min={1024} max={diskMax} step={1024}
             />
             <div className="flex justify-between text-xs text-muted-foreground">
-              <span>1 GB</span><span className="font-medium text-foreground">{(storageLimit / 1024).toFixed(1)} GB</span><span>100 GB</span>
+              <span>1 GB</span>
+              <span className="font-medium text-foreground">{(storageLimit / 1024).toFixed(1)} GB</span>
+              <span>{systemDiskMB > 0 ? `${(diskMax / 1024).toFixed(0)} GB (drive total)` : "100 GB"}</span>
             </div>
           </div>
 
