@@ -35,6 +35,8 @@ export const servers = sqliteTable("servers", {
   directory: text("directory"),
   javaArgs: text("javaArgs").default("-Xmx2G -Xms1G"),
   autoRestart: integer("autoRestart").default(0).notNull(), // 0 = off, 1 = on
+  ramLimit: integer("ramLimit").default(4096).notNull(), // in MB, default 4GB
+  storageLimit: integer("storageLimit").default(10240).notNull(), // in MB, default 10GB
   createdAt: integer("createdAt", { mode: "timestamp" }).defaultNow().notNull(),
   updatedAt: integer("updatedAt", { mode: "timestamp" }).defaultNow().notNull(),
 });

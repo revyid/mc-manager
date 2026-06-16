@@ -53,6 +53,14 @@ export default function PerformanceMonitor({ serverId, isOnline }: { serverId: n
     { enabled: isAuthenticated, staleTime: 30000 }
   );
 
+  const { data: serverInfo } = trpc.servers.list.useQuery(undefined, {
+    enabled: isAuthenticated,
+    select: (data) => data.find((s) => s.id === serverId),
+  });
+
+  const ramLimit = serverInfo?.ramLimit || 4096; // in MB
+  const storageLimit = serverInfo?.storageLimit || 10240; // in MB
+
   // Seed from DB history once
   const seeded = useRef(false);
   useEffect(() => {
@@ -95,15 +103,21 @@ export default function PerformanceMonitor({ serverId, isOnline }: { serverId: n
 
   const statCards = [
     { label: "CPU", value: `${latest?.cpu ?? 0}%`, avg: `avg ${avg("cpu")}%`, color: "text-blue-400", warn: latest && (latest.cpu as number) > 80 },
-    { label: "RAM", value: `${latest?.ram ?? 0} MB`, avg: `avg ${avg("ram")} MB`, color: "text-purple-400" },
+    { label: "RAM", value: `${latest?.ram ?? 0} MB / ${ramLimit} MB`, avg: `avg ${avg("ram")} MB`, color: "text-purple-400", warn: latest && (latest.ram as number) > (ramLimit * 0.9) },
     { label: "TPS", value: points.length ? (latest?.tps ?? 20) : 0, avg: `avg ${avg("tps")}`, color: "text-green-400" },
-    { label: "Disk", value: formatDisk(latestDisk), avg: `avg ${formatDisk(avgDisk)}`, color: "text-orange-400" },
+    { label: "Disk", value: `${formatDisk(latestDisk)} / ${formatDisk(storageLimit)}`, avg: `avg ${formatDisk(avgDisk)}`, color: "text-orange-400", warn: latest && (latestDisk as number) > (storageLimit * 0.9) },
     { label: "Samples", value: points.length, avg: null, color: "text-zinc-400" },
   ];
 
   // Dynamic max for RAM chart
-  const maxRam = points.length ? Math.max(...points.map((p) => p.ram)) : 2048;
-  const ramDomain = [0, Math.ceil(maxRam * 1.2 / 128) * 128];
+  const maxRamVal = points.length ? Math.max(...points.map((p) => p.ram)) : 0;
+  const chartMaxRam = Math.max(ramLimit, maxRamVal);
+  const ramDomain = [0, Math.ceil(chartMaxRam * 1.1 / 128) * 128];
+
+  // Dynamic max for Disk chart
+  const maxDiskVal = points.length ? Math.max(...points.map((p) => p.disk)) : 0;
+  const chartMaxDisk = Math.max(storageLimit, maxDiskVal);
+  const diskDomain = [0, Math.ceil(chartMaxDisk * 1.1 / 1024) * 1024];
 
   if (isLoading && !points.length) return (
     <div className="space-y-4">
@@ -214,7 +228,7 @@ export default function PerformanceMonitor({ serverId, isOnline }: { serverId: n
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                   <XAxis dataKey="t" stroke="#52525b" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
-                  <YAxis stroke="#52525b" tick={{ fontSize: 9 }} unit=" MB" />
+                  <YAxis stroke="#52525b" tick={{ fontSize: 9 }} domain={diskDomain} unit=" MB" />
                   <Tooltip content={<CustomTooltip />} />
                   <Area type="monotone" dataKey="disk" stroke="#f97316" fill="url(#diskG)" strokeWidth={2} dot={false} />
                 </AreaChart>

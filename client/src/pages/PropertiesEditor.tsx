@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
-import { Loader2, RefreshCw, Save, Info, Cpu } from "lucide-react";
+import { Loader2, RefreshCw, Save, Info, Cpu, HardDrive } from "lucide-react";
 import { toast } from "sonner";
 
 const PROPERTY_META: Record<string, { type: "text" | "number" | "boolean" | "slider"; label: string; description?: string; min?: number; max?: number; category: string }> = {
@@ -76,6 +76,14 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
   const [jvmSaving, setJvmSaving] = useState(false);
   const [autoRestart, setAutoRestart] = useState(false);
 
+  // Resource Limits state
+  const [ramLimit, setRamLimit] = useState(4096);
+  const [storageLimit, setStorageLimit] = useState(10240);
+  const [limitsDirty, setLimitsDirty] = useState(false);
+  const [limitsSaving, setLimitsSaving] = useState(false);
+
+  const utils = trpc.useUtils();
+
   const { data: serverInfo } = trpc.servers.list.useQuery(undefined, {
     select: (data) => data.find((s) => s.id === serverId),
   });
@@ -90,7 +98,16 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
     onError: (e) => toast.error(e.message || "Failed to update auto-restart"),
   });
 
-  // Parse javaArgs from server info
+  const updateResourceLimitsMutation = trpc.servers.updateResourceLimits.useMutation({
+    onSuccess: () => {
+      setLimitsDirty(false);
+      toast.success("Resource limits saved!");
+      utils.servers.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message || "Failed to save resource limits"),
+  });
+
+  // Parse javaArgs and resource limits from server info
   useEffect(() => {
     if (!serverInfo) return;
     if (serverInfo.javaArgs) {
@@ -106,7 +123,21 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
       }
     }
     setAutoRestart(serverInfo.autoRestart === 1);
-  }, [serverInfo?.javaArgs, serverInfo?.autoRestart]);
+    if (serverInfo.ramLimit !== undefined) {
+      setRamLimit(serverInfo.ramLimit);
+    }
+    if (serverInfo.storageLimit !== undefined) {
+      setStorageLimit(serverInfo.storageLimit);
+    }
+  }, [serverInfo?.javaArgs, serverInfo?.autoRestart, serverInfo?.ramLimit, serverInfo?.storageLimit]);
+
+  const handleSaveLimits = () => {
+    setLimitsSaving(true);
+    updateResourceLimitsMutation.mutate(
+      { serverId, ramLimit, storageLimit },
+      { onSettled: () => setLimitsSaving(false) }
+    );
+  };
 
   const handleSaveJvm = () => {
     setJvmSaving(true);
@@ -286,6 +317,93 @@ export default function PropertiesEditor({ serverId }: { serverId: number }) {
               }}
               disabled={toggleAutoRestartMutation.isPending}
             />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Resource Allocation Limits */}
+      <Card className="rounded-xl border-orange-500/20">
+        <CardHeader className="pb-3 pt-4 px-5">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <HardDrive className="w-4 h-4 text-orange-400" />
+            Resource Allocation Limits
+            <Badge variant="outline" className="text-xs text-orange-400 border-orange-500/30">Dashboard Display</Badge>
+          </CardTitle>
+          <p className="text-xs text-muted-foreground mt-0.5">Customize the RAM and Storage limits displayed on the Performance Monitor dashboard.</p>
+        </CardHeader>
+        <Separator />
+        <CardContent className="p-5 space-y-5">
+          {/* RAM Limit */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-xs font-medium">Dashboard RAM Limit</Label>
+                <p className="text-xs text-muted-foreground">Allocated RAM limit for gauge display</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  value={ramLimit}
+                  min={512}
+                  max={65536}
+                  step={256}
+                  className="h-8 text-sm font-mono w-24"
+                  onChange={(e) => { setRamLimit(Number(e.target.value)); setLimitsDirty(true); }}
+                />
+                <span className="text-xs text-muted-foreground">MB ({(ramLimit / 1024).toFixed(1)} GB)</span>
+              </div>
+            </div>
+            <Slider
+              value={[ramLimit]}
+              onValueChange={([v]) => { setRamLimit(v); setLimitsDirty(true); }}
+              min={512} max={32768} step={256}
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>512 MB</span><span className="font-medium text-foreground">{ramLimit} MB</span><span>32 GB</span>
+            </div>
+          </div>
+
+          {/* Storage Limit */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-xs font-medium">Dashboard Storage Limit</Label>
+                <p className="text-xs text-muted-foreground">Allocated disk space limit for gauge display</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  value={storageLimit}
+                  min={1024}
+                  max={1048576}
+                  step={1024}
+                  className="h-8 text-sm font-mono w-24"
+                  onChange={(e) => { setStorageLimit(Number(e.target.value)); setLimitsDirty(true); }}
+                />
+                <span className="text-xs text-muted-foreground">MB ({(storageLimit / 1024).toFixed(1)} GB)</span>
+              </div>
+            </div>
+            <Slider
+              value={[storageLimit]}
+              onValueChange={([v]) => { setStorageLimit(v); setLimitsDirty(true); }}
+              min={1024} max={102400} step={1024}
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>1 GB</span><span className="font-medium text-foreground">{(storageLimit / 1024).toFixed(1)} GB</span><span>100 GB</span>
+            </div>
+          </div>
+
+          {/* Action Button */}
+          <div className="flex justify-end pt-1">
+            <Button
+              size="sm"
+              className="gap-1.5 h-8 bg-orange-600 text-white hover:bg-orange-700"
+              onClick={handleSaveLimits}
+              disabled={!limitsDirty || limitsSaving}
+            >
+              {limitsSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              Save Limits
+            </Button>
           </div>
         </CardContent>
       </Card>

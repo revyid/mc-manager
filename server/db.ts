@@ -36,6 +36,8 @@ export async function getDb() {
 const MIGRATIONS: string[] = [
   `ALTER TABLE servers ADD COLUMN javaArgs TEXT DEFAULT '-Xmx2G -Xms1G'`,
   `ALTER TABLE servers ADD COLUMN autoRestart INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE servers ADD COLUMN ramLimit INTEGER NOT NULL DEFAULT 4096`,
+  `ALTER TABLE servers ADD COLUMN storageLimit INTEGER NOT NULL DEFAULT 10240`,
 ];
 
 export async function runMigrations(): Promise<void> {

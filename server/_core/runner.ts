@@ -21,22 +21,28 @@ const pidCache = new Map<number, number>();
 // Tracks servers intentionally stopped (to not auto-restart them on exit)
 const intentionalStop = new Set<number>();
 
-// Recursively sum directory size (sync, shallow cap at depth 5)
-function getDirSizeMB(dir: string, depth = 0): number {
-  if (depth > 5) return 0;
+// Recursively sum directory size (async, non-blocking, shallow cap at depth 20)
+async function getDirSizeMBAsync(dir: string, depth = 0): Promise<number> {
+  if (depth > 20) return 0;
   let total = 0;
   try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      try {
-        if (e.isDirectory()) {
-          total += getDirSizeMB(full, depth + 1);
-        } else {
-          total += fs.statSync(full).size;
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    const sizes = await Promise.all(
+      entries.map(async (e) => {
+        const full = path.join(dir, e.name);
+        try {
+          if (e.isDirectory()) {
+            return await getDirSizeMBAsync(full, depth + 1);
+          } else {
+            const stat = await fs.promises.stat(full);
+            return stat.size;
+          }
+        } catch {
+          return 0;
         }
-      } catch {}
-    }
+      })
+    );
+    total = sizes.reduce((a, b) => a + b, 0);
   } catch {}
   return total / 1024 / 1024;
 }
@@ -147,10 +153,22 @@ setInterval(async () => {
           } catch {}
         }
 
-        // Measure disk usage of server directory
+        // Measure disk usage of server directory asynchronously
         if (dbServer.directory && fs.existsSync(dbServer.directory)) {
-          disk = Math.round(getDirSizeMB(dbServer.directory));
+          try {
+            disk = Math.round(await getDirSizeMBAsync(dbServer.directory));
+          } catch {}
         }
+
+        // Update live stats cache so getLiveServerStats can use it immediately!
+        const current = liveStatsCache.get(serverId) || { cpu: 0, ram: 0, disk: 0, pid: null, ts: 0 };
+        liveStatsCache.set(serverId, {
+          cpu,
+          ram,
+          disk: disk || current.disk,
+          pid: pid || null,
+          ts: Date.now(),
+        });
 
         await db.createMetric({
           serverId,
@@ -188,12 +206,12 @@ export function startMinecraftServer(serverId: number, directory: string, type: 
   if (type === "bedrock") {
     const exePath = path.join(directory, "bedrock_server.exe");
     if (!fs.existsSync(exePath)) throw new Error("bedrock_server.exe not found.");
-    child = spawn(exePath, [], { cwd: directory, shell: true });
+    child = spawn(exePath, [], { cwd: directory });
   } else {
     const jarPath = path.join(directory, "server.jar");
     if (!fs.existsSync(jarPath)) throw new Error("server.jar not found. Please download it first.");
     fs.writeFileSync(path.join(directory, "eula.txt"), "eula=true");
-    child = spawn("java", [...javaArgs.split(" ").filter(Boolean), "-jar", "server.jar", "nogui"], { cwd: directory, shell: true });
+    child = spawn("java", [...javaArgs.split(" ").filter(Boolean), "-jar", "server.jar", "nogui"], { cwd: directory });
   }
 
   const serverInfo: RunningServer = {
@@ -365,10 +383,17 @@ export async function getLiveServerStats(serverId: number) {
   // Try managed process first, then find PID from port
   const pid = server?.process?.pid || getPidForServer(serverId, port);
 
-  // Measure disk in background (non-blocking estimate)
+  // Get disk from cache, or queue an async scan if not available
   let disk = liveStatsCache.get(serverId)?.disk ?? 0;
-  if (dbServer.directory && fs.existsSync(dbServer.directory)) {
-    try { disk = Math.round(getDirSizeMB(dbServer.directory)); } catch {}
+  if (disk === 0 && dbServer.directory && fs.existsSync(dbServer.directory)) {
+    getDirSizeMBAsync(dbServer.directory).then((size) => {
+      const current = liveStatsCache.get(serverId) || { cpu: 0, ram: 0, disk: 0, pid: null, ts: 0 };
+      liveStatsCache.set(serverId, {
+        ...current,
+        disk: Math.round(size),
+        ts: Date.now(),
+      });
+    }).catch(() => {});
   }
 
   if (pid) {
@@ -377,7 +402,7 @@ export async function getLiveServerStats(serverId: number) {
       const result = {
         cpu: Math.round(stats.cpu * 10) / 10,
         ram: Math.round(stats.memory / 1024 / 1024),
-        disk,
+        disk: liveStatsCache.get(serverId)?.disk ?? disk,
         pid,
       };
       liveStatsCache.set(serverId, { ...result, ts: Date.now() });

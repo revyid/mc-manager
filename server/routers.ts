@@ -397,6 +397,20 @@ export const appRouter = router({
         await db.updateServer(input.serverId, { autoRestart: input.enabled ? 1 : 0 });
         return { success: true };
       }),
+
+    updateResourceLimits: protectedProcedure
+      .input(z.object({
+        serverId: z.number(),
+        ramLimit: z.number().min(512).max(1048576), // 512MB to 1TB
+        storageLimit: z.number().min(1024).max(10485760), // 1GB to 10TB
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const server = await db.getServerById(input.serverId);
+        if (!server) throw new TRPCError({ code: "NOT_FOUND", message: "Server not found" });
+        if (server.ownerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Not your server" });
+        await db.updateServer(input.serverId, { ramLimit: input.ramLimit, storageLimit: input.storageLimit });
+        return { success: true, message: "Resource limits updated successfully." };
+      }),
   }),
 
   players: router({

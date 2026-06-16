@@ -243,12 +243,26 @@ function OverviewTab({ serverId, serverInfo, isOnline }: { serverId: number; ser
   const latest = metrics[metrics.length - 1];
   const playerCount = liveAny?.players ?? 0;
 
+  const ramLimit = serverInfo.ramLimit || 4096;
+  const storageLimit = serverInfo.storageLimit || 10240;
+
   // Prefer live data, then fall back to most recent metric
   const cpuVal = liveAny?.cpu != null ? `${liveAny.cpu}%` : (latest ? `${latest.cpu}%` : "—");
-  const ramVal = liveAny?.ram != null ? `${liveAny.ram} MB` : (latest ? `${latest.ram} MB` : "—");
-  const diskVal = liveAny?.disk != null
-    ? (liveAny.disk >= 1024 ? `${(liveAny.disk / 1024).toFixed(2)} GB` : `${liveAny.disk} MB`)
-    : (latest?.disk ? (latest.disk >= 1024 ? `${(latest.disk / 1024).toFixed(2)} GB` : `${latest.disk} MB`) : "—");
+  
+  const ramVal = liveAny?.ram != null 
+    ? `${liveAny.ram} MB / ${ramLimit} MB` 
+    : (latest ? `${latest.ram} MB / ${ramLimit} MB` : `— / ${ramLimit} MB`);
+
+  const formatDiskVal = (mb: number) => {
+    if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
+    return `${mb} MB`;
+  };
+
+  const diskValCurrent = liveAny?.disk != null ? liveAny.disk : (latest?.disk ? latest.disk : null);
+  const diskVal = diskValCurrent != null 
+    ? `${formatDiskVal(diskValCurrent)} / ${formatDiskVal(storageLimit)}` 
+    : `— / ${formatDiskVal(storageLimit)}`;
+
   const tpsVal = latest ? `${latest.tps}` : "—";
 
   const stats = [
