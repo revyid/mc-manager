@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/libsql";
 import { createClient } from "@libsql/client";
 import { 
@@ -267,11 +267,12 @@ export async function createBackup(backup: InsertBackup) {
 export async function getMetricsByServerId(serverId: number, limit = 24) {
   const db = await getDb();
   if (!db) return [];
-  return db.select()
+  const results = await db.select()
     .from(performanceMetrics)
     .where(eq(performanceMetrics.serverId, serverId))
-    .orderBy(performanceMetrics.timestamp)
+    .orderBy(desc(performanceMetrics.timestamp))
     .limit(limit);
+  return results.reverse();
 }
 
 export async function createMetric(metric: InsertPerformanceMetric) {

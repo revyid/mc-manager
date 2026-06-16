@@ -8,7 +8,7 @@ import { hashPassword, verifyPassword } from "./_core/auth-utils";
 import { sdk } from "./_core/sdk";
 import { TRPCError } from "@trpc/server";
 import { getVersionsByType, downloadServerJar, ServerType } from "./_core/minecraft";
-import { startMinecraftServer, stopMinecraftServer, restartMinecraftServer, isServerRunning, sendCommand, getServerLogs, getLiveServerStats } from "./_core/runner";
+import { startMinecraftServer, stopMinecraftServer, restartMinecraftServer, isServerRunning, sendCommand, getServerLogs, getLiveServerStats, getDirSizeMBAsync } from "./_core/runner";
 import path from "node:path";
 import fs from "node:fs";
 import axios from "axios";
@@ -533,10 +533,9 @@ export const appRouter = router({
 
           // Check if it's a world folder (contains level.dat)
           if (fs.existsSync(path.join(fullPath, "level.dat"))) {
-            let totalSize = 0;
+            let totalSizeMB = 0;
             try {
-              const stat = fs.statSync(fullPath);
-              totalSize = stat.size;
+              totalSizeMB = await getDirSizeMBAsync(fullPath);
             } catch {}
 
             let lastModified = new Date().toISOString();
@@ -548,7 +547,7 @@ export const appRouter = router({
             worlds.push({
               id: worldId++,
               name: entry.name,
-              size: `${(totalSize / (1024 * 1024)).toFixed(1)} MB`,
+              size: `${totalSizeMB.toFixed(1)} MB`,
               lastModified,
               createdAt: lastModified,
             });

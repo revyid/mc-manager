@@ -50,7 +50,7 @@ export default function PerformanceMonitor({ serverId, isOnline }: { serverId: n
   // Historical from DB — used to seed on first load
   const { data: history = [] } = trpc.performance.getMetrics.useQuery(
     { serverId },
-    { enabled: isAuthenticated, staleTime: 30000 }
+    { enabled: isAuthenticated, staleTime: 1000 }
   );
 
   const { data: serverInfo } = trpc.servers.list.useQuery(undefined, {

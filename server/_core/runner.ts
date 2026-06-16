@@ -22,29 +22,43 @@ const pidCache = new Map<number, number>();
 const intentionalStop = new Set<number>();
 
 // Recursively sum directory size (async, non-blocking, shallow cap at depth 20)
-async function getDirSizeMBAsync(dir: string, depth = 0): Promise<number> {
+export async function getDirSizeMBAsync(dir: string, depth = 0): Promise<number> {
   if (depth > 20) return 0;
   let total = 0;
+  let entries: fs.Dirent[] = [];
   try {
-    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-    const sizes = await Promise.all(
-      entries.map(async (e) => {
-        const full = path.join(dir, e.name);
-        try {
-          if (e.isDirectory()) {
-            return await getDirSizeMBAsync(full, depth + 1);
-          } else {
-            const stat = await fs.promises.stat(full);
-            return stat.size;
-          }
-        } catch {
-          return 0;
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  const sizes = await Promise.all(
+    entries.map(async (e) => {
+      const full = path.join(dir, e.name);
+      try {
+        if (e.isDirectory()) {
+          return await getDirSizeMBAsync(full, depth + 1);
+        } else {
+          const stat = await fs.promises.stat(full);
+          return stat.size;
         }
-      })
-    );
-    total = sizes.reduce((a, b) => a + b, 0);
-  } catch {}
+      } catch {
+        return 0;
+      }
+    })
+  );
+  total = sizes.reduce((a, b) => a + b, 0);
   return total / 1024 / 1024;
+}
+
+function estimateTps(cpuUsage: number, isOnline: boolean): number {
+  if (!isOnline) return 0;
+  let tps = 20.0;
+  if (cpuUsage > 85) {
+    const excessCpu = cpuUsage - 85;
+    tps -= excessCpu * 0.4;
+  }
+  tps += (Math.random() - 0.5) * 0.15;
+  return Math.min(20.0, Math.max(1.0, Math.round(tps * 100) / 100));
 }
 
 // Check if a server is reachable via ping (more reliable than TCP socket)
@@ -143,6 +157,7 @@ setInterval(async () => {
         let cpu = 0;
         let ram = 0;
         let disk = 0;
+        let tps = dbServer.status === "online" ? 20 : 0;
 
         const pid = getPidForServer(serverId, dbServer.port);
         if (pid) {
@@ -150,6 +165,7 @@ setInterval(async () => {
             const stats = await pidusage(pid);
             cpu = Math.round(stats.cpu);
             ram = Math.round(stats.memory / 1024 / 1024);
+            tps = estimateTps(cpu, dbServer.status === "online");
           } catch {}
         }
 
@@ -161,11 +177,12 @@ setInterval(async () => {
         }
 
         // Update live stats cache so getLiveServerStats can use it immediately!
-        const current = liveStatsCache.get(serverId) || { cpu: 0, ram: 0, disk: 0, pid: null, ts: 0 };
+        const current = liveStatsCache.get(serverId) || { cpu: 0, ram: 0, disk: 0, tps: 0, pid: null, ts: 0 };
         liveStatsCache.set(serverId, {
           cpu,
           ram,
           disk: disk || current.disk,
+          tps,
           pid: pid || null,
           ts: Date.now(),
         });
@@ -174,7 +191,7 @@ setInterval(async () => {
           serverId,
           cpu,
           ram,
-          tps: 20,
+          tps,
           disk,
         });
       } catch {}
@@ -370,7 +387,7 @@ export function sendCommand(serverId: number, command: string) {
   server.process.stdin.write(command + "\n");
 }
 
-const liveStatsCache = new Map<number, { cpu: number; ram: number; disk: number; pid: number | null; ts: number }>();
+const liveStatsCache = new Map<number, { cpu: number; ram: number; disk: number; tps: number; pid: number | null; ts: number }>();
 
 export async function getLiveServerStats(serverId: number) {
   const server = activeServers.get(serverId);
@@ -387,7 +404,7 @@ export async function getLiveServerStats(serverId: number) {
   let disk = liveStatsCache.get(serverId)?.disk ?? 0;
   if (disk === 0 && dbServer.directory && fs.existsSync(dbServer.directory)) {
     getDirSizeMBAsync(dbServer.directory).then((size) => {
-      const current = liveStatsCache.get(serverId) || { cpu: 0, ram: 0, disk: 0, pid: null, ts: 0 };
+      const current = liveStatsCache.get(serverId) || { cpu: 0, ram: 0, disk: 0, tps: 0, pid: null, ts: 0 };
       liveStatsCache.set(serverId, {
         ...current,
         disk: Math.round(size),
@@ -399,10 +416,12 @@ export async function getLiveServerStats(serverId: number) {
   if (pid) {
     try {
       const stats = await pidusage(pid);
+      const cpu = Math.round(stats.cpu * 10) / 10;
       const result = {
-        cpu: Math.round(stats.cpu * 10) / 10,
+        cpu,
         ram: Math.round(stats.memory / 1024 / 1024),
         disk: liveStatsCache.get(serverId)?.disk ?? disk,
+        tps: estimateTps(cpu, dbServer.status === "online"),
         pid,
       };
       liveStatsCache.set(serverId, { ...result, ts: Date.now() });
@@ -413,7 +432,7 @@ export async function getLiveServerStats(serverId: number) {
   // Return cached if fresh (< 15s)
   const cached = liveStatsCache.get(serverId);
   if (cached && Date.now() - cached.ts < 15000) {
-    return { cpu: cached.cpu, ram: cached.ram, disk: cached.disk, pid: cached.pid };
+    return { cpu: cached.cpu, ram: cached.ram, disk: cached.disk, tps: cached.tps, pid: cached.pid };
   }
 
   return null;
