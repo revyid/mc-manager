@@ -12,13 +12,14 @@ import {
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
+let _client: ReturnType<typeof createClient> | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      const client = createClient({ url: `file:${process.env.DATABASE_URL}` });
-      _db = drizzle(client);
+      _client = createClient({ url: `file:${process.env.DATABASE_URL}` });
+      _db = drizzle(_client);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -26,6 +27,38 @@ export async function getDb() {
   }
   return _db;
 }
+
+/**
+ * Migrations applied via raw SQL ALTER TABLE ADD COLUMN.
+ * Each statement is idempotent: "duplicate column name" errors are swallowed.
+ * Add new columns here instead of relying on drizzle-kit push recreating tables.
+ */
+const MIGRATIONS: string[] = [
+  `ALTER TABLE servers ADD COLUMN javaArgs TEXT DEFAULT '-Xmx2G -Xms1G'`,
+  `ALTER TABLE servers ADD COLUMN autoRestart INTEGER NOT NULL DEFAULT 0`,
+];
+
+export async function runMigrations(): Promise<void> {
+  if (!process.env.DATABASE_URL) return;
+  if (!_client) {
+    _client = createClient({ url: `file:${process.env.DATABASE_URL}` });
+    _db = drizzle(_client);
+  }
+  for (const sql of MIGRATIONS) {
+    try {
+      await _client.execute(sql);
+      console.log(`[Migration] Applied: ${sql.slice(0, 60)}...`);
+    } catch (err: any) {
+      // SQLite returns "duplicate column name" when column already exists — safe to ignore
+      if (err?.message?.includes("duplicate column name") || err?.code === "SQLITE_ERROR") {
+        // column already exists, skip
+      } else {
+        console.error(`[Migration] Failed: ${sql}\n`, err);
+      }
+    }
+  }
+}
+
 
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) {
